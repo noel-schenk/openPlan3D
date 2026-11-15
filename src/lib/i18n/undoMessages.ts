@@ -10,6 +10,7 @@ const keys: Extract<TranslationKey, `undoAction.${string}`>[] = [
   'undoAction.customEntourage',
   'undoAction.entourage',
   'undoAction.floor',
+  'undoAction.floorPlane',
   'undoAction.stair',
   'undoAction.wall',
   'undoAction.elevation',

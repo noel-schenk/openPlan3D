@@ -145,6 +145,22 @@ export interface Stair {
   riserCount: number; // default 14
   direction: 'up' | 'down';
   stairType: StairType; // default 'straight'
+  /** Custom total vertical rise in cm; omitted uses floor-to-floor spacing (or 260cm). */
+  height?: number;
+}
+
+export interface FloorPlane {
+  id: string;
+  position: Point;
+  rotation: number;
+  width: number;      // horizontal width in cm (X), default 400
+  height: number;     // horizontal depth/length in cm (Y on plan), default 400
+  thickness: number;  // vertical thickness in cm, default 20
+  /** Vertical offset of the top surface above the floor level in cm; defaults to 0. */
+  elevation?: number;
+  color?: string;
+  floorTexture?: string;
+  locked?: boolean;
 }
 
 export interface Column {
@@ -234,6 +250,7 @@ export interface Floor {
   furniture: FurnitureItem[];
   stairs: Stair[];
   columns: Column[];
+  floorPlanes?: FloorPlane[];
   backgroundImage?: BackgroundImage;
   guides: GuideLine[];
   measurements: Measurement[];

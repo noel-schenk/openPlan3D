@@ -30,6 +30,7 @@ export function printBounds(floor: Floor, customEntourage?: CustomEntourageDef[]
   }
   for (const item of floor.stairs ?? []) box(item.position, item.width, item.depth, item.rotation);
   for (const item of floor.columns ?? []) box(item.position, item.diameter, item.diameter, item.rotation);
+  for (const item of floor.floorPlanes ?? []) box(item.position, item.width, item.height, item.rotation);
   for (const item of floor.entourage ?? []) box(item.position, item.width, item.width * entourageAspect(item.defId, customEntourage), item.rotation);
   for (const item of floor.measurements ?? []) points.push({ x: item.x1, y: item.y1 }, { x: item.x2, y: item.y2 });
   for (const item of floor.annotations ?? []) {

@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { DEFAULT_STAIR_RISE, stairRises, stairSpan } from '$lib/utils/stairLevels';
 import { sceneSignature } from '$lib/utils/sceneSignature';
 import { createDefaultFloor, createDefaultProject } from '$lib/stores/project';
+import { readProject } from '$lib/utils/projectValidation';
 import type { Stair } from '$lib/models/types';
 
 const stair = (direction: Stair['direction']): Stair => ({ id: `s-${direction}`, position: { x: 0, y: 0 }, rotation: 0,
@@ -48,4 +49,25 @@ it('rebuilds the active floor when a neighbouring elevation changes the height o
   const withStair = signature();
   project.floors[1].elevation = 340;
   expect(signature()).not.toBe(withStair);
+});
+
+it('uses a custom stair height when provided and falls back otherwise', () => {
+  const rises = { up: 300, down: 275 };
+  expect(stairSpan({ direction: 'up', height: 340 }, rises)).toEqual({ base: 0, rise: 340 });
+  expect(stairSpan({ direction: 'down', height: 220 }, rises)).toEqual({ base: -220, rise: 220 });
+  expect(stairSpan({ direction: 'up', height: 0 }, rises)).toEqual({ base: 0, rise: 300 });
+  expect(stairSpan({ direction: 'down', height: -50 }, rises)).toEqual({ base: -275, rise: 275 });
+  expect(stairSpan({ direction: 'up', height: Number.NaN }, rises)).toEqual({ base: 0, rise: 300 });
+  expect(stairSpan({ direction: 'up', height: undefined }, rises)).toEqual({ base: 0, rise: 300 });
+});
+
+it('validates optional stair height cleanly on load', () => {
+  const valid = createDefaultProject();
+  valid.floors[0].stairs.push({ ...stair('up'), height: 340 });
+  const loaded = readProject(JSON.parse(JSON.stringify(valid)));
+  expect(loaded.floors[0].stairs[0].height).toBe(340);
+
+  const invalid = JSON.parse(JSON.stringify(valid));
+  invalid.floors[0].stairs[0].height = 0;
+  expect(() => readProject(invalid)).toThrow();
 });

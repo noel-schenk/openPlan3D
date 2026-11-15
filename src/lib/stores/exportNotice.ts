@@ -47,6 +47,31 @@ export async function exportPNGWithFeedback(project: Project) {
   }
 }
 
+export async function exportUSDZWithFeedback(project: Project): Promise<boolean> {
+  exportNotice.set(null);
+  const visibility = currentPlanExportVisibility();
+  const has3DContent = project.floors.some(
+    floor =>
+      floor.walls.length > 0 ||
+      floor.stairs.length > 0 ||
+      floor.columns.length > 0 ||
+      floor.furniture.length > 0 ||
+      (floor.floorPlanes?.length ?? 0) > 0,
+  );
+  try {
+    const { exportAsUSDZ } = await import('$lib/utils/usdzExport');
+    if (await exportAsUSDZ(project, visibility)) return true;
+    exportNotice.set({
+      title: 'exportNotice.usdzTitle',
+      message: has3DContent ? 'exportNotice.allHidden' : 'exportNotice.usdzEmpty',
+    });
+    return false;
+  } catch {
+    exportNotice.set({ title: 'exportNotice.usdzTitle', message: 'exportNotice.usdzFailed' });
+    return false;
+  }
+}
+
 /** Like PNG and PDF, the vector and CAD exports explain an empty floor or a failure instead of doing nothing; labels follow `language`. */
 export function exportSVGWithFeedback(project: Project, language: Locale = 'en') {
   exportNotice.set(null);

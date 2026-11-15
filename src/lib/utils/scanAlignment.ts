@@ -130,7 +130,7 @@ export function doorJoin(floor: Floor, movingDoorId: string, targetDoorId: strin
     movedIds.push(wall.id);
   }
   for (const opening of [...next.doors, ...next.windows]) if (group.has(opening.wallId)) movedIds.push(opening.id);
-  for (const item of [...next.furniture, ...next.stairs ?? [], ...next.columns ?? [], ...next.entourage ?? []]) if (belongs(item.position)) {
+  for (const item of [...next.furniture, ...next.stairs ?? [], ...next.columns ?? [], ...next.floorPlanes ?? [], ...next.entourage ?? []]) if (belongs(item.position)) {
     item.position = move(item.position);
     item.rotation = turn(item.rotation);
     movedIds.push(item.id);

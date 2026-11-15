@@ -12,12 +12,10 @@ export function framingContext(project: Pick<Project, 'id'>, floor: Pick<Floor, 
 }
 
 /**
- * Whether a scene rebuild fits the orbit camera to the scene again. Only a new context does: the
- * viewer's first build, another project, another active floor (picked, or restored by Undo) or the
- * all-floors toggle. Edits, Undo/Redo, unit changes and photo textures that finish loading rebuild
- * the same context and keep the user's viewpoint; Top-Down View fits the view on request.
+ * Whether a scene rebuild fits the orbit camera to the scene again. Only the initial build,
+ * another project or toggling all-floors stacking does: switching floors within the same project
+ * keeps the user's camera viewpoint and zoom across floors.
  */
 export function shouldFrameScene(previous: FramingContext | null, next: FramingContext): boolean {
-  return previous === null || previous.projectId !== next.projectId
-    || previous.floorId !== next.floorId || previous.stacked !== next.stacked;
+  return previous === null || previous.projectId !== next.projectId || previous.stacked !== next.stacked;
 }

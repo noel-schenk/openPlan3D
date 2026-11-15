@@ -10,8 +10,8 @@
   import { planContentBounds, hasPlanContent } from '$lib/utils/planContentBounds';
   import { connectedWallEndpoints } from '$lib/utils/wallEditing';
   import { createDrawScheduler } from '$lib/utils/drawScheduler';
-  import { activeFloor, selectedTool, selectedElementId, selectedElementIds, selectedRoomId, addWall, addDoor, addWindow, updateWall, moveWallEndpoint, moveWallGeometryDuringDrag, updateDoor, updateWindow, addFurniture, moveFurniture, transformFurnitureDuringDrag, rotateFurniture, rotateSelection, setFurnitureRotation, scaleFurniture, removeElement, placingFurnitureId, placingRotation, placingDoorType, placingWindowType, detectedRoomsStore, duplicateDoor, duplicateWindow, duplicateFurniture, duplicateSelection, pasteSelection, moveWallParallel, splitWall, wallSplitIntersectsOpening, snapEnabled, placingStair, addStair, moveStair, updateStair, placingColumn, placingColumnShape, addColumn, moveColumn, updateColumn, calibrationMode, calibrationPoints, updateBackgroundImage, setBackgroundImage, canvasZoom, canvasMinimumZoom, canvasCamX, canvasCamY, panMode, showFurnitureStore, addGuide, moveGuide, removeGuide, beginUndoGroup, endUndoGroup, layerVisibility, updateRoom, addMeasurement, updateMeasurement, removeMeasurement, addAnnotation, removeAnnotation, updateAnnotation, addTextAnnotation, removeTextAnnotation, updateTextAnnotation, moveTextAnnotation, toggleFurnitureLock, toggleSelectionLock, createGroup, ungroupElements, findGroupForElement, placingEntourageId, addEntourageItem, moveEntourage, resizeEntourage, currentProject, elevationWallId, elevationPickMode, doorJoinMode, joinScanDoors } from '$lib/stores/project';
-  import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, GuideLine, Measurement, Annotation, TextAnnotation, CustomEntourageDef } from '$lib/models/types';
+  import { activeFloor, selectedTool, selectedElementId, selectedElementIds, selectedRoomId, addWall, addDoor, addWindow, updateWall, moveWallEndpoint, moveWallGeometryDuringDrag, updateDoor, updateWindow, addFurniture, moveFurniture, transformFurnitureDuringDrag, updateFurniture, rotateFurniture, rotateSelection, setFurnitureRotation, scaleFurniture, removeElement, placingFurnitureId, placingRotation, placingDoorType, placingWindowType, detectedRoomsStore, duplicateDoor, duplicateWindow, duplicateFurniture, duplicateSelection, pasteSelection, moveWallParallel, splitWall, wallSplitIntersectsOpening, snapEnabled, placingStair, addStair, moveStair, updateStair, placingColumn, placingColumnShape, addColumn, moveColumn, updateColumn, placingFloorPlane, addFloorPlane, moveFloorPlane, updateFloorPlane, calibrationMode, calibrationPoints, updateBackgroundImage, setBackgroundImage, canvasZoom, canvasMinimumZoom, canvasCamX, canvasCamY, panMode, showFurnitureStore, addGuide, moveGuide, removeGuide, beginUndoGroup, endUndoGroup, layerVisibility, updateRoom, addMeasurement, updateMeasurement, removeMeasurement, addAnnotation, removeAnnotation, updateAnnotation, addTextAnnotation, removeTextAnnotation, updateTextAnnotation, moveTextAnnotation, toggleFurnitureLock, toggleSelectionLock, createGroup, ungroupElements, findGroupForElement, placingEntourageId, addEntourageItem, moveEntourage, updateEntourageItem, resizeEntourage, currentProject, elevationWallId, elevationPickMode, doorJoinMode, joinScanDoors } from '$lib/stores/project';
+  import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, FloorPlane, GuideLine, Measurement, Annotation, TextAnnotation, CustomEntourageDef } from '$lib/models/types';
   import type { Floor, Room } from '$lib/models/types';
   import { resolveRoomGeometry, roomLabelPosition, roomCentroid } from '$lib/utils/roomDetection';
   import { roomHoles } from '$lib/utils/roomNesting';
@@ -25,6 +25,7 @@
   import { hasOpenModal } from '$lib/utils/modalDialog';
   import { focusInlineEditor } from '$lib/utils/inlineEditorFocus';
   import ContextMenu from './ContextMenu.svelte';
+  import Mini3DPreview from './Mini3DPreview.svelte';
   import { roomPresets, placePreset } from '$lib/utils/roomPresets';
   import { roomTemplates, placeRoomTemplate } from '$lib/utils/roomTemplates';
   import { openingDropTarget } from '$lib/utils/openingDrop';
@@ -33,13 +34,13 @@
   import type { ProjectSettings } from '$lib/stores/settings';
   import { snapStatus } from '$lib/utils/snapStep';
   import { angleSnapWithin, resizeFurnitureFromHandle, snap as _snap, type CanvasState } from '$lib/utils/canvasInteraction';
-  import { drawWall as _drawWall, drawDoorOnWall as _drawDoorOnWall, drawWindowOnWall as _drawWindowOnWall, drawDoorDistanceDimensions as _drawDoorDistanceDimensions, drawWindowDistanceDimensions as _drawWindowDistanceDimensions, drawFurnitureItem, drawStair as _drawStair, drawColumn as _drawColumn, drawGuides as _drawGuides, drawPersistedMeasurements as _drawPersistedMeasurements, drawTextAnnotations as _drawTextAnnotations, drawAnnotation as _drawAnnotation, drawAnnotations as _drawAnnotations, drawRooms as _drawRooms, drawWallJoints as _drawWallJoints, drawSnapPoints as _drawSnapPoints, drawMinimap as _drawMinimap, drawEntourageItems as _drawEntourageItems, drawEntourageGhost as _drawEntourageGhost, drawFloorBelowGhost as _drawFloorBelowGhost, entourageAspect } from '$lib/utils/canvasRenderer';
+  import { drawWall as _drawWall, drawDoorOnWall as _drawDoorOnWall, drawWindowOnWall as _drawWindowOnWall, drawDoorDistanceDimensions as _drawDoorDistanceDimensions, drawWindowDistanceDimensions as _drawWindowDistanceDimensions, drawFurnitureItem, drawStair as _drawStair, drawColumn as _drawColumn, drawFloorPlane as _drawFloorPlane, drawGuides as _drawGuides, drawPersistedMeasurements as _drawPersistedMeasurements, drawTextAnnotations as _drawTextAnnotations, drawAnnotation as _drawAnnotation, drawAnnotations as _drawAnnotations, drawRooms as _drawRooms, drawWallJoints as _drawWallJoints, drawSnapPoints as _drawSnapPoints, drawMinimap as _drawMinimap, drawEntourageItems as _drawEntourageItems, drawEntourageGhost as _drawEntourageGhost, drawFloorBelowGhost as _drawFloorBelowGhost, entourageAspect } from '$lib/utils/canvasRenderer';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
   import { translatedOpeningPosition } from '$lib/utils/openingTranslation';
   import { translatedWallGeometry, wallGeometryOf, type WallGeometry } from '$lib/utils/wallTranslation';
   import { marqueeSelectionIds } from '$lib/utils/marqueeSelection';
   import { isTracingImageType } from '$lib/utils/tracingImage';
-  import { findRoomLabelAt as _findRoomLabelAt, positionOnWall, findWallAt as _findWallAt, findHandleAt as _findHandleAt, findFurnitureAt as _findFurnitureAt, findColumnAt as _findColumnAt, findStairAt as _findStairAt, findDoorAt as _findDoorAt, findWindowAt as _findWindowAt, findRoomAt as _findRoomAt, hitTestMeasurement as _hitTestMeasurement, hitTestAnnotation as _hitTestAnnotation, hitTestTextAnnotation as _hitTestTextAnnotation, findEntourageAt } from '$lib/utils/hitTesting';
+  import { findRoomLabelAt as _findRoomLabelAt, positionOnWall, findWallAt as _findWallAt, findHandleAt as _findHandleAt, findFurnitureAt as _findFurnitureAt, findColumnAt as _findColumnAt, findStairAt as _findStairAt, findFloorPlaneAt as _findFloorPlaneAt, findDoorAt as _findDoorAt, findWindowAt as _findWindowAt, findRoomAt as _findRoomAt, hitTestMeasurement as _hitTestMeasurement, hitTestAnnotation as _hitTestAnnotation, hitTestTextAnnotation as _hitTestTextAnnotation, findEntourageAt } from '$lib/utils/hitTesting';
 
   let canvas: HTMLCanvasElement;
   let ctx: CanvasRenderingContext2D;
@@ -173,7 +174,7 @@
   let showRulers = $state(true);
 
   // Layer visibility toggles
-  let layerVis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true });
+  let layerVis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, floorPlanes: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true });
   // Sync showFurnitureStore ↔ layerVisibility.furniture
   let showFurniture = $derived(layerVis.furniture);
   $effect(() => { showFurnitureStore.set(layerVis.furniture); });
@@ -195,6 +196,7 @@
   let showStairs = $derived(layerVis.stairs);
   let showLayerPanel = $state(false);
   let showMinimap = $state(true);
+  let show3DPreview = $state(true);
   let minimapCanvas = $state<HTMLCanvasElement>();
   const RULER_SIZE = 24;
 
@@ -243,6 +245,9 @@
   let placingColShape: 'round' | 'square' = $state('round');
   let draggingColumnId: string | null = $state(null);
   let columnDragOffset: Point = { x: 0, y: 0 };
+  let isPlacingFloorPlane: boolean = $state(false);
+  let draggingFloorPlaneId: string | null = $state(null);
+  let floorPlaneDragOffset: Point = { x: 0, y: 0 };
   let isCalibrating: boolean = $state(false);
   let calPoints: Point[] = $state([]);
   let bgImage: HTMLImageElement | null = $state(null);
@@ -330,6 +335,7 @@
           if (fi) { if (!fi.locked) origPositions.set(id, { position: { ...fi.position } }); continue; }
           if (currentFloor.stairs) { const st = currentFloor.stairs.find(s => s.id === id); if (st) { origPositions.set(id, { position: { ...st.position } }); continue; } }
           if (currentFloor.columns) { const col = currentFloor.columns.find(c => c.id === id); if (col) { origPositions.set(id, { position: { ...col.position } }); continue; } }
+          if (currentFloor.floorPlanes) { const fp = currentFloor.floorPlanes.find(p => p.id === id); if (fp && !fp.locked) { origPositions.set(id, { position: { ...fp.position } }); continue; } }
         }
         for (const item of currentFloor.entourage ?? []) {
           if (currentSelectedIds.has(item.id) && !item.locked) origPositions.set(item.id, { position: { ...item.position } });
@@ -345,7 +351,7 @@
     if (!currentFloor) return;
     const ids = new Set<string>();
     for (const items of [currentFloor.walls, currentFloor.furniture, currentFloor.doors,
-      currentFloor.windows, currentFloor.stairs, currentFloor.columns, currentFloor.entourage,
+      currentFloor.windows, currentFloor.stairs, currentFloor.columns, currentFloor.floorPlanes, currentFloor.entourage,
       layerVis.textAnnotations ? currentFloor.textAnnotations : [],
       layerVis.measurements ? currentFloor.measurements : [], layerVis.annotations ? currentFloor.annotations : []]) {
       for (const item of items ?? []) ids.add(item.id);
@@ -599,32 +605,14 @@
     const cat = getCatalogItem(currentPlacingId);
     if (!cat) return;
 
-    const wallSnap = snapFurnitureToWall(mousePos, cat);
-    placementWallSnap = wallSnap;
-
-    const pos = wallSnap ? wallSnap.position : mousePos;
-    const rot = wallSnap ? wallSnap.rotation : currentPlacingRotation;
+    placementWallSnap = null;
+    const pos = { x: snap(mousePos.x), y: snap(mousePos.y) };
+    const rot = currentPlacingRotation;
 
     const s = worldToScreen(pos.x, pos.y);
     const w = cat.width * zoom;
     const d = cat.depth * zoom;
     const angle = (rot * Math.PI) / 180;
-
-    if (wallSnap && currentFloor) {
-      const snapWall = currentFloor.walls.find(wl => wl.id === wallSnap.wallId);
-      if (snapWall) {
-        const ws = worldToScreen(snapWall.start.x, snapWall.start.y);
-        const we = worldToScreen(snapWall.end.x, snapWall.end.y);
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 3]);
-        ctx.beginPath();
-        ctx.moveTo(ws.x, ws.y);
-        ctx.lineTo(we.x, we.y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
 
     ctx.save();
     ctx.translate(s.x, s.y);
@@ -960,6 +948,10 @@
     _drawColumn(getCS(), col, selected);
   }
 
+  function drawFloorPlane(plane: FloorPlane, selected: boolean) {
+    _drawFloorPlane(getCS(), plane, selected);
+  }
+
   function rulerLabel(worldCm: number, tickStep: number, isImperial: boolean): string {
     if (isImperial) {
       const inches = worldCm / 2.54;
@@ -1193,6 +1185,12 @@
     const selId = currentSelectedId;
     const multiIds = currentSelectedIds;
     function isSelected(id: string) { return id === selId || multiIds.has(id); }
+
+    if (layerVis.floorPlanes && floor.floorPlanes) {
+      for (const plane of floor.floorPlanes) {
+        drawFloorPlane(plane, isSelected(plane.id));
+      }
+    }
 
     drawRooms();
     // Above the room fills, below this floor's own walls. Room floor textures
@@ -1468,6 +1466,15 @@
       ctx.globalAlpha = 0.5;
       const preview: Stair = { id: 'preview', position: mousePos, rotation: 0, width: 100, depth: 300, riserCount: 14, direction: 'up', stairType: 'straight' };
       drawStair(preview, false);
+      ctx.restore();
+    }
+
+    // Floor plane placement preview
+    if (isPlacingFloorPlane) {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      const preview: FloorPlane = { id: 'preview', position: mousePos, rotation: 0, width: 400, height: 400, thickness: 20, elevation: 0, color: '#d6d3d1', floorTexture: 'none' };
+      drawFloorPlane(preview, false);
       ctx.restore();
     }
 
@@ -1789,12 +1796,17 @@
     const resizeObs = new ResizeObserver(resize);
     resizeObs.observe(canvas.parentElement!);
 
-    const floorViews = new Map<string, { x: number; y: number; zoom: number; minimumZoom: number; fitted: boolean }>();
-    let activeViewKey: string | null = null;
+    const projectViews = new Map<string, { x: number; y: number; zoom: number; minimumZoom: number; fitted: boolean }>();
+    let activeProjectKey: string | null = null;
+    let activeFloorKey: string | null = null;
     initialFitDone = false;
     let initialFitPending = false;
     function queueInitialFit() {
       if (initialFitDone || initialFitPending) return;
+      if (camX !== 0 || camY !== 0 || zoom !== 1) {
+        initialFitDone = true;
+        return;
+      }
       initialFitPending = true;
       requestAnimationFrame(() => {
         initialFitPending = false;
@@ -1807,14 +1819,18 @@
       });
     }
     const unsub1 = activeFloor.subscribe((f) => {
-      const viewKey = f ? JSON.stringify([get(currentProject)?.id, f.id]) : null;
-      if (viewKey !== activeViewKey) {
-        if (activeViewKey) floorViews.set(activeViewKey, { x: camX, y: camY, zoom, minimumZoom, fitted: initialFitDone });
-        activeViewKey = viewKey;
-        const saved = viewKey ? floorViews.get(viewKey) : undefined;
+      const projectKey = get(currentProject)?.id ?? null;
+      const floorKey = f?.id ?? null;
+      if (projectKey !== activeProjectKey) {
+        if (activeProjectKey) projectViews.set(activeProjectKey, { x: camX, y: camY, zoom, minimumZoom, fitted: initialFitDone });
+        activeProjectKey = projectKey;
+        const saved = projectKey ? projectViews.get(projectKey) : undefined;
         camX = saved?.x ?? 0; camY = saved?.y ?? 0; zoom = saved?.zoom ?? 1;
         minimumZoom = saved?.minimumZoom ?? 0.1;
         initialFitDone = saved?.fitted ?? false;
+      }
+      if (floorKey !== activeFloorKey) {
+        activeFloorKey = floorKey;
         measureStart = null;
         measureEnd = null;
         annotationStart = null;
@@ -1846,9 +1862,10 @@
       if (t !== currentTool) {
         finishCanvasGesture();
         if (joinMode) doorJoinMode.set(null);
-        // Stair/column arming belongs to the select tool; another tool's click must not place one.
+        // Stair/column/floor-plane arming belongs to the select tool; another tool's click must not place one.
         placingStair.set(false);
         placingColumn.set(false);
+        placingFloorPlane.set(false);
         measureStart = null;
         measureEnd = null;
         annotationStart = null;
@@ -1868,7 +1885,7 @@
     const unsub10 = snapEnabled.subscribe((v) => { currentSnapEnabled = v; markDirty(); });
     const unsub_snapgrid = projectSettings.subscribe((s) => { currentSnapToGrid = s.snapToGrid; currentSnapToWalls = s.snapToWalls; currentGridSize = s.gridSize; markDirty(); });
     const unsub11 = placingStair.subscribe((v) => { isPlacingStair = v; markDirty(); });
-    const unsubEnt1 = placingEntourageId.subscribe((id) => { currentEntourageDefId = id; if (id) { placingStair.set(false); placingColumn.set(false); } markDirty(); });
+    const unsubEnt1 = placingEntourageId.subscribe((id) => { currentEntourageDefId = id; if (id) { placingStair.set(false); placingColumn.set(false); placingFloorPlane.set(false); } markDirty(); });
     const unsubEnt2 = currentProject.subscribe((pr) => {
       if (clipboard && clipboard.projectId !== pr?.id) clipboard = null;
       customEntourageDefs = pr?.customEntourage;
@@ -1894,6 +1911,7 @@
     });
     const unsub_col = placingColumn.subscribe((v) => { isPlacingColumn = v; markDirty(); });
     const unsub_cols = placingColumnShape.subscribe((v) => { placingColShape = v; markDirty(); });
+    const unsub_fp = placingFloorPlane.subscribe((v) => { isPlacingFloorPlane = v; markDirty(); });
     const unsub12 = calibrationMode.subscribe((v) => { isCalibrating = v; markDirty(); });
     const unsub13 = calibrationPoints.subscribe((pts) => { calPoints = pts; markDirty(); });
     const unsub_multi = selectedElementIds.subscribe((ids) => { currentSelectedIds = ids; markDirty(); });
@@ -1959,7 +1977,7 @@
     canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
 
-    return () => { mounted = false; drawing?.stop(); stopTextures(); resizeObs.disconnect(); unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub_multi(); unsub_elevopen(); unsub_elevpick(); unsub_join(); unsub14(); unsub_col(); unsub_cols(); unsub_layers(); unsub_snapgrid(); unsubEnt1(); unsubEnt2(); document.removeEventListener('paste', handlePaste); canvas.removeEventListener('touchstart', onTouchStart); canvas.removeEventListener('touchmove', onTouchMove); canvas.removeEventListener('touchend', onTouchEnd); canvas.removeEventListener('touchcancel', onTouchEnd); };
+    return () => { mounted = false; drawing?.stop(); stopTextures(); resizeObs.disconnect(); unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub_multi(); unsub_elevopen(); unsub_elevpick(); unsub_join(); unsub14(); unsub_col(); unsub_cols(); unsub_fp(); unsub_layers(); unsub_snapgrid(); unsubEnt1(); unsubEnt2(); document.removeEventListener('paste', handlePaste); canvas.removeEventListener('touchstart', onTouchStart); canvas.removeEventListener('touchmove', onTouchMove); canvas.removeEventListener('touchend', onTouchEnd); canvas.removeEventListener('touchcancel', onTouchEnd); };
   });
 
   /** Compute world bounding box of all elements */
@@ -2164,6 +2182,11 @@
   function findStairAt(p: Point): Stair | null {
     if (!currentFloor) return null;
     return _findStairAt(p, currentFloor.stairs);
+  }
+
+  function findFloorPlaneAt(p: Point): FloorPlane | null {
+    if (!currentFloor || !layerVis.floorPlanes) return null;
+    return _findFloorPlaneAt(p, currentFloor.floorPlanes);
   }
 
   function findDoorAt(p: Point): Door | null {
@@ -2376,6 +2399,14 @@
       return;
     }
 
+    if (isPlacingFloorPlane && tool === 'select') {
+      const pos = { x: snap(wp.x), y: snap(wp.y) };
+      const id = addFloorPlane(pos);
+      selectedElementId.set(id);
+      placingFloorPlane.set(false);
+      return;
+    }
+
     // Guide line click detection (select / start drag)
     if (tool === 'select' && currentFloor?.guides) {
       const GUIDE_HIT = 6 / zoom; // 6px tolerance in world units
@@ -2453,10 +2484,8 @@
     // Column and stair placement moved earlier (before select-mode handlers)
 
     if (tool === 'furniture' && currentPlacingId) {
-      const placingCat = getCatalogItem(currentPlacingId);
-      const wallSnap = placingCat ? snapFurnitureToWall(wp, placingCat) : null;
-      const pos = wallSnap ? wallSnap.position : { x: snap(wp.x), y: snap(wp.y) };
-      const rot = wallSnap ? wallSnap.rotation : currentPlacingRotation;
+      const pos = { x: snap(wp.x), y: snap(wp.y) };
+      const rot = currentPlacingRotation;
       beginUndoGroup();
       try {
         const id = addFurniture(currentPlacingId, pos);
@@ -2675,6 +2704,15 @@
             if (w) roomDragStartPositions.set(wid, wallGeometryOf(w));
           }
         } else {
+          const floorPlane = findFloorPlaneAt(wp);
+          if (floorPlane) {
+            if (selectElement(floorPlane.id, e.shiftKey)) return;
+            if (!e.shiftKey && !floorPlane.locked) {
+              draggingFloorPlaneId = floorPlane.id;
+              floorPlaneDragOffset = { x: wp.x - floorPlane.position.x, y: wp.y - floorPlane.position.y };
+            }
+            return;
+          }
           // Empty space — start marquee selection
           marqueeStart = { ...wp };
           marqueeEnd = { ...wp };
@@ -2796,7 +2834,7 @@
     }
 
     if ((draggingWallEndpoint || draggingWallParallel || draggingCurveHandle || draggingRoomId
-      || draggingStairId || draggingColumnId || draggingTextAnnotationId || draggingMultiSelect
+      || draggingStairId || draggingColumnId || draggingFloorPlaneId || draggingTextAnnotationId || draggingMultiSelect
       || draggingDoorId || draggingWindowId || draggingGuideId || draggingEntourageId || resizingEntourageId) && !geometryGestureStarted) {
       if (Math.hypot(e.clientX - canvasPressPosition.x, e.clientY - canvasPressPosition.y) < 3) return;
       beginUndoGroup();
@@ -2913,6 +2951,7 @@
           if (fi) { moveFurniture(id, newPos); continue; }
           if (currentFloor.stairs) { const st = currentFloor.stairs.find(s => s.id === id); if (st) { moveStair(id, newPos); continue; } }
           if (currentFloor.columns) { const col = currentFloor.columns.find(c => c.id === id); if (col) { moveColumn(id, newPos); continue; } }
+          if (currentFloor.floorPlanes) { const fp = currentFloor.floorPlanes.find(p => p.id === id); if (fp) { moveFloorPlane(id, newPos); continue; } }
           if (currentFloor.entourage?.some(item => item.id === id)) moveEntourage(id, newPos);
         }
       }
@@ -2985,6 +3024,10 @@
     if (draggingStairId && currentFloor?.stairs) {
       const basePos = { x: mousePos.x - stairDragOffset.x, y: mousePos.y - stairDragOffset.y };
       moveStair(draggingStairId, { x: snap(basePos.x), y: snap(basePos.y) });
+    }
+    if (draggingFloorPlaneId && currentFloor?.floorPlanes) {
+      const basePos = { x: mousePos.x - floorPlaneDragOffset.x, y: mousePos.y - floorPlaneDragOffset.y };
+      moveFloorPlane(draggingFloorPlaneId, { x: snap(basePos.x), y: snap(basePos.y) });
     }
     if (draggingEntourageId) {
       const basePos = { x: mousePos.x - dragOffset.x, y: mousePos.y - dragOffset.y };
@@ -3137,6 +3180,7 @@
     resizingEntourageId = null;
     draggingStairId = null;
     draggingColumnId = null;
+    draggingFloorPlaneId = null;
     draggingDoorId = null;
     draggingWindowId = null;
     draggingHandle = null;
@@ -3344,6 +3388,53 @@
     return { x: wallStart.x + (dx / d) * lenCm, y: wallStart.y + (dy / d) * lenCm };
   }
 
+  const ARROW_DIRECTIONS: Record<string, [number, number]> = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  };
+
+  function nudgeSelectedObjects(dx: number, dy: number): boolean {
+    if (!currentFloor) return false;
+    const ids = fitSelectionIds();
+    if (ids.size === 0) return false;
+
+    const collections: Array<{
+      items: Array<{ id: string; position: Point; locked?: boolean }>;
+      update: (id: string, updates: { position: Point }) => void;
+    }> = [
+      { items: currentFloor.furniture, update: updateFurniture },
+      { items: currentFloor.stairs ?? [], update: updateStair },
+      { items: currentFloor.columns ?? [], update: updateColumn },
+      { items: currentFloor.floorPlanes ?? [], update: updateFloorPlane },
+      { items: currentFloor.entourage ?? [], update: updateEntourageItem },
+    ];
+
+    const moves: Array<() => void> = [];
+    for (const { items, update } of collections) {
+      for (const item of items) {
+        if (ids.has(item.id) && !item.locked) {
+          moves.push(() => update(item.id, { position: { x: item.position.x + dx, y: item.position.y + dy } }));
+        }
+      }
+    }
+    for (const ta of currentFloor.textAnnotations ?? []) {
+      if (ids.has(ta.id)) {
+        moves.push(() => updateTextAnnotation(ta.id, { x: ta.x + dx, y: ta.y + dy }));
+      }
+    }
+    if (moves.length === 0) return false;
+
+    if (moves.length > 1) beginUndoGroup();
+    try {
+      for (const apply of moves) apply();
+    } finally {
+      if (moves.length > 1) endUndoGroup('Moved selection');
+    }
+    return true;
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     if (hasOpenModal()) return;
     if (e.target === canvas && (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey))) {
@@ -3361,6 +3452,14 @@
     if (isControlKey(e)) return;
     shiftDown = e.shiftKey;
     if (e.code === 'Space') { spaceDown = true; e.preventDefault(); return; }
+
+    const dir = ARROW_DIRECTIONS[e.key];
+    if (dir && !editingTextAnnotationId && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (nudgeSelectedObjects(dir[0], dir[1])) {
+        e.preventDefault();
+        return;
+      }
+    }
 
     // Exact-length entry while drawing a wall (issue #6):
     // type a number, then Enter places the wall at exactly that length.
@@ -3443,6 +3542,7 @@
       placingEntourageId.set(null);
       placingStair.set(false);
       placingColumn.set(false);
+      placingFloorPlane.set(false);
       placingRotation.set(0);
       editingTextAnnotationId = null;
       textAnnotationMode = false;
@@ -3503,7 +3603,7 @@
     if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !e.shiftKey) {
       if (currentFloor) {
         const copyable = [...currentFloor.walls,...currentFloor.doors,...currentFloor.windows,...currentFloor.furniture,
-          ...currentFloor.stairs ?? [],...currentFloor.columns ?? [],...currentFloor.entourage ?? [],
+          ...currentFloor.stairs ?? [],...currentFloor.columns ?? [],...currentFloor.floorPlanes ?? [],...currentFloor.entourage ?? [],
           ...currentFloor.textAnnotations ?? [],...currentFloor.measurements ?? [],...currentFloor.annotations ?? []];
         const ids = [...fitSelectionIds()].filter(id => copyable.some(item => item.id === id));
         if (ids.length) {
@@ -3913,6 +4013,7 @@
     draggingWindowId ? 'move' :
     draggingStairId ? 'move' :
     draggingColumnId ? 'move' :
+    draggingFloorPlaneId ? 'move' :
     draggingTextAnnotationId ? 'move' :
     draggingWallParallel ? 'move' :
     draggingCurveHandle ? 'crosshair' :
@@ -4070,6 +4171,13 @@
       </div>
     </div>
   {/if}
+  <!-- 3D preview window (above Mini-map) -->
+  {#if show3DPreview && currentFloor}
+    <Mini3DPreview
+      bottomOffset={showMinimap && hasPlanContent(currentFloor) ? '170px' : '40px'}
+      onclose={() => { show3DPreview = false; }}
+    />
+  {/if}
   <!-- Mini-map -->
   {#if showMinimap && currentFloor && hasPlanContent(currentFloor)}
     <canvas
@@ -4124,6 +4232,9 @@
     <button class="hover:text-gray-700" onclick={() => showRulers = !showRulers} title={$t('canvasDisplay.rulersHint')} aria-pressed={showRulers}>
       {showRulers ? '📏' : '📐'} {$t('canvasDisplay.rulers')}
     </button>
+    <button class="hover:text-gray-700" onclick={() => show3DPreview = !show3DPreview} title={$t('canvasDisplay.preview3dHint')} aria-pressed={show3DPreview}>
+      🧊 {$t('canvasDisplay.preview3d')}
+    </button>
     <button class="hover:text-gray-700" onclick={() => showMinimap = !showMinimap} title={$t('canvasDisplay.mapHint')} aria-pressed={showMinimap}>
       {showMinimap ? '🗺' : '🗺'} {$t('canvasDisplay.map')}
     </button>
@@ -4132,7 +4243,7 @@
   {#if showLayerPanel}
     <div style:--visible-bottom={`${zoomControlsBottom}px`} class="absolute bottom-12 right-2 max-md:bottom-[calc(var(--visible-bottom)+6rem)] z-20 bg-white rounded-lg shadow-lg border border-gray-200 p-3 text-xs min-w-[160px]">
       <div class="font-semibold text-gray-700 mb-2">{$t('layers.title')}</div>
-      {#each [['walls',$t('layers.walls')],['doors',$t('layers.doors')],['windows',$t('layers.windows')],['furniture',$t('layers.furniture')],['stairs',$t('layers.stairs')],['columns',$t('layers.columns')],['guides',$t('layers.guides')],['measurements',$t('layers.measurements')],['annotations',$t('layerVisibility.dimensions')],['textAnnotations',$t('layers.textAnnotations')]] as [key, label]}
+      {#each [['walls',$t('layers.walls')],['doors',$t('layers.doors')],['windows',$t('layers.windows')],['furniture',$t('layers.furniture')],['stairs',$t('layers.stairs')],['columns',$t('layers.columns')],['floorPlanes',$t('layers.floorPlanes')],['guides',$t('layers.guides')],['measurements',$t('layers.measurements')],['annotations',$t('layerVisibility.dimensions')],['textAnnotations',$t('layers.textAnnotations')]] as [key, label]}
         <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-gray-50 rounded px-1">
           <input type="checkbox" checked={(layerVis as Record<string, boolean>)[key]} onchange={() => layerVisibility.update(v => ({ ...v, [key]: !(v as Record<string, boolean>)[key] }))} class="accent-blue-500" />
           <span>{label}</span>
@@ -4184,7 +4295,7 @@
         const s = worldToScreen(furn.position.x, furn.position.y);
         return { type: 'furniture', pos: s };
       }
-      const positioned = [...f.stairs ?? [], ...f.columns ?? [], ...f.entourage ?? []].find(item => item.id === currentSelectedId);
+      const positioned = [...f.stairs ?? [], ...f.columns ?? [], ...f.floorPlanes ?? [], ...f.entourage ?? []].find(item => item.id === currentSelectedId);
       if (positioned) return { type: 'object', pos: worldToScreen(positioned.position.x, positioned.position.y) };
       return null;
     })()}

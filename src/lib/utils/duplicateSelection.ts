@@ -47,7 +47,7 @@ export function pastePlanSelection(source: Floor, floor: Floor, selected: Readon
       (items as typeof copy[]).push(copy);
     }
   }
-  for (const key of ['furniture', 'stairs', 'columns', 'entourage'] as const) {
+  for (const key of ['furniture', 'stairs', 'columns', 'floorPlanes', 'entourage'] as const) {
     for (const item of [...source[key] ?? []]) {
       if (!selected.has(item.id)) continue;
       const copy = structuredClone(item);

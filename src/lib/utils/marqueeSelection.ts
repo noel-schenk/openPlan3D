@@ -17,7 +17,7 @@ export function marqueeSelectionIds(floor: Floor, rect: MarqueeRect, layers: Mar
     const wall = floor.walls.find(w => w.id === opening.wallId);
     if (wall && inside(wallPointAt(wall, opening.position))) ids.push(opening.id);
   }
-  for (const item of [...floor.furniture, ...(floor.stairs ?? []), ...(floor.columns ?? []), ...(floor.entourage ?? [])]) if (inside(item.position)) ids.push(item.id);
+  for (const item of [...floor.furniture, ...(floor.stairs ?? []), ...(floor.columns ?? []), ...(floor.floorPlanes ?? []), ...(floor.entourage ?? [])]) if (inside(item.position)) ids.push(item.id);
   if (layers.textAnnotations) for (const note of floor.textAnnotations ?? []) if (inside(note)) ids.push(note.id);
   for (const line of [...(layers.measurements ? floor.measurements ?? [] : []), ...(layers.annotations ? floor.annotations ?? [] : [])]) {
     if (inside({ x: line.x1, y: line.y1 }) && inside({ x: line.x2, y: line.y2 })) ids.push(line.id);

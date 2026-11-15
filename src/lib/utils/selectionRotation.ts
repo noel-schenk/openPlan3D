@@ -11,7 +11,7 @@ type RotationUpdate = Omit<RotationItem, 'id'>;
 export function selectionRotation(floor: Floor, ids: ReadonlySet<string>, degrees: number, customDefs?: CustomEntourageDef[]) {
   const updates = new Map<string, RotationUpdate>();
   if (!Number.isFinite(degrees) || degrees % 360 === 0) return updates;
-  const objects = [...floor.furniture,...floor.stairs ?? [],...floor.columns ?? [],...floor.entourage ?? []]
+  const objects = [...floor.furniture,...floor.stairs ?? [],...floor.columns ?? [],...floor.floorPlanes ?? [],...floor.entourage ?? []]
     .filter(item => ids.has(item.id) && !('locked' in item && item.locked));
   // Openings sit at a fraction of their wall, so they follow a rotated wall by themselves. Walls
   // turn only as a closed group: a corner shared with an unselected wall would tear the loop and

@@ -23,8 +23,10 @@ export function stairRises(floors: Floor[], floorId: string): StairRises {
 
 /** Vertical extent relative to the stair's own floor surface. Direction does not change the
  * stair's shape, as on the plan: an up stair starts at its floor, a down stair ends at it. */
-export function stairSpan(stair: Pick<Stair, 'direction'>, rises: StairRises): { base: number; rise: number } {
-  return stair.direction === 'down' ? { base: -rises.down, rise: rises.down } : { base: 0, rise: rises.up };
+export function stairSpan(stair: Pick<Stair, 'direction' | 'height'>, rises: StairRises): { base: number; rise: number } {
+  const autoRise = stair.direction === 'down' ? rises.down : rises.up;
+  const rise = typeof stair.height === 'number' && Number.isFinite(stair.height) && stair.height > 0 ? stair.height : autoRise;
+  return stair.direction === 'down' ? { base: -rise, rise } : { base: 0, rise };
 }
 
 /** The floor directly below, by elevation. */

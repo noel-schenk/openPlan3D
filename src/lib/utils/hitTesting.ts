@@ -1,11 +1,12 @@
 import { stairContainsLocalPoint } from './stairPlanGeometry';
+import { floorPlaneContainsPoint } from './floorPlaneGeometry';
 import { roomHoles } from './roomNesting';
 /**
  * Hit-testing utilities for the floor plan canvas.
  * All functions are pure — they take data and return results.
  * Extracted from FloorPlanCanvas.svelte.
  */
-import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, Floor, Measurement, Annotation, TextAnnotation, EntourageItem } from '$lib/models/types';
+import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, FloorPlane, Floor, Measurement, Annotation, TextAnnotation, EntourageItem } from '$lib/models/types';
 import type { Room } from '$lib/models/types';
 import { getFurnitureSize } from '$lib/utils/furnitureCatalog';
 import { getRoomPolygon, roomLabelPosition } from '$lib/utils/roomDetection';
@@ -150,6 +151,14 @@ export function findStairAt(p: Point, stairs: Stair[] | undefined): Stair | null
     const rx = dx * Math.cos(angle) - dy * Math.sin(angle);
     const ry = dx * Math.sin(angle) + dy * Math.cos(angle);
     if (stairContainsLocalPoint(stair, rx, ry)) return stair;
+  }
+  return null;
+}
+
+export function findFloorPlaneAt(p: Point, floorPlanes: FloorPlane[] | undefined): FloorPlane | null {
+  if (!floorPlanes) return null;
+  for (const plane of [...floorPlanes].reverse()) {
+    if (floorPlaneContainsPoint(p, plane)) return plane;
   }
   return null;
 }

@@ -12,7 +12,8 @@
   import type { DetailTarget } from '$lib/models/types';
   import { catalogAssetUrl } from '$lib/utils/catalogAssetUrl';
 
-  import { currentProject, activeFloor, selectedElementId, selectedRoomId, updateWall, resizeWallLength, reverseWall, updateDoor, updateWindow, updateRoom, updateFurniture, detectedRoomsStore, updateStair, updateColumn, updateBackgroundImage, setBackgroundImage, calibrationMode, calibrationPoints, doorJoinMode, updateTextAnnotation, toggleFurnitureLock, updateEntourageItem, removeElement, elevationWallId } from '$lib/stores/project';
+  import { currentProject, activeFloor, selectedElementId, selectedRoomId, updateWall, resizeWallLength, reverseWall, updateDoor, updateWindow, updateRoom, updateFurniture, detectedRoomsStore, updateStair, updateColumn, updateFloorPlane, updateBackgroundImage, setBackgroundImage, calibrationMode, calibrationPoints, doorJoinMode, updateTextAnnotation, toggleFurnitureLock, updateEntourageItem, removeElement, elevationWallId } from '$lib/stores/project';
+  import { stairRises, stairSpan } from '$lib/utils/stairLevels';
   import { wallLength as calcWallLength, MIN_WALL_LENGTH, type WallEndpoint } from '$lib/utils/wallEditing';
   import { openingOnWall } from '$lib/utils/wallProfiles';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
@@ -21,7 +22,7 @@
   import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
   import { MAX_FURNITURE_ELEVATION, furnitureElevation, storedFurnitureElevation } from '$lib/utils/furnitureElevation';
   import { projectSettings, formatLength, formatArea, parseLengthInput } from '$lib/stores/settings';
-    import type { Floor, Wall, Door, Window as Win, Room, FurnitureItem, Stair, Column, RoomCategory, TextAnnotation } from '$lib/models/types';
+    import type { Floor, FloorPlane, Wall, Door, Window as Win, Room, FurnitureItem, Stair, Column, RoomCategory, TextAnnotation } from '$lib/models/types';
   import { getWallStartHeight, getWallEndHeight } from '$lib/models/types';
 
   let floor = $state<Floor | null>(null);
@@ -55,8 +56,14 @@
   let selectedFurniture = $derived(floor?.furniture?.find(f => f.id === selId) ?? null);
   let selectedStair = $derived(floor?.stairs?.find(s => s.id === selId) ?? null);
   let selectedColumn = $derived(floor?.columns?.find(c => c.id === selId) ?? null);
+  let selectedFloorPlane = $derived(floor?.floorPlanes?.find(fp => fp.id === selId) ?? null);
   let selectedTextAnnotation = $derived(floor?.textAnnotations?.find(t => t.id === selId) ?? null);
   let selectedEntourage = $derived(floor?.entourage?.find(en => en.id === selId) ?? null);
+  let autoStairRise = $derived.by(() => {
+    if (!selectedStair || !floor) return 260;
+    const rises = stairRises($currentProject?.floors ?? [], floor.id);
+    return stairSpan({ direction: selectedStair.direction }, rises).rise;
+  });
   let hasBgImage = $derived(!!floor?.backgroundImage);
   let selectedRoom = $derived(floor && selRoomId
     ? resolveRooms(floor, detectedRooms).find(r => r.id === selRoomId) ?? null
@@ -118,8 +125,50 @@
   function onStairRisers(e: Event) {
     if (selectedStair) scalarInput(e, selectedStair.riserCount, value => updateStair(selectedStair!.id, { riserCount: value }));
   }
+  function onStairHeight(e: Event) {
+    if (!selectedStair) return;
+    const input = e.target as HTMLInputElement;
+    if (!input.value.trim() && !input.validity.badInput) {
+      if (selectedStair.height !== undefined) updateStair(selectedStair.id, { height: undefined });
+      return;
+    }
+    const value = inputToCm(input.valueAsNumber);
+    const valid = input.validity.valid && Number.isFinite(value) && value > 0;
+    if (valid && (selectedStair.height === undefined || input.valueAsNumber !== displayValue(selectedStair.height))) {
+      updateStair(selectedStair.id, { height: value });
+    } else if (!valid && e.type === 'blur') {
+      input.value = selectedStair.height !== undefined ? String(displayValue(selectedStair.height)) : '';
+    }
+  }
   function onStairRotation(e: Event) {
     if (selectedStair) scalarInput(e, selectedStair.rotation, value => updateStair(selectedStair!.id, { rotation: value }));
+  }
+  function signedDimensionInput(
+    e: Event,
+    current: number,
+    save: (cm: number) => void,
+    validate: (cm: number) => boolean = () => true,
+  ) {
+    const input = e.target as HTMLInputElement;
+    const value = inputToCm(input.valueAsNumber);
+    const valid = input.value.trim() && input.validity.valid && Number.isFinite(value) && validate(value);
+    if (valid && input.valueAsNumber !== displayValue(current)) save(value);
+    else if (!valid && e.type === 'blur') input.value = String(displayValue(current));
+  }
+  function onFloorPlaneWidth(e: Event) {
+    if (selectedFloorPlane) dimensionInput(e, selectedFloorPlane.width, value => updateFloorPlane(selectedFloorPlane!.id, { width: value }));
+  }
+  function onFloorPlaneHeight(e: Event) {
+    if (selectedFloorPlane) dimensionInput(e, selectedFloorPlane.height, value => updateFloorPlane(selectedFloorPlane!.id, { height: value }));
+  }
+  function onFloorPlaneThickness(e: Event) {
+    if (selectedFloorPlane) dimensionInput(e, selectedFloorPlane.thickness, value => updateFloorPlane(selectedFloorPlane!.id, { thickness: value }));
+  }
+  function onFloorPlaneElevation(e: Event) {
+    if (selectedFloorPlane) signedDimensionInput(e, selectedFloorPlane.elevation ?? 0, value => updateFloorPlane(selectedFloorPlane!.id, { elevation: value }));
+  }
+  function onFloorPlaneRotation(e: Event) {
+    if (selectedFloorPlane) scalarInput(e, selectedFloorPlane.rotation, value => updateFloorPlane(selectedFloorPlane!.id, { rotation: value }));
   }
   function onColumnDiameter(e: Event) {
     if (selectedColumn) dimensionInput(e, selectedColumn.diameter, value => updateColumn(selectedColumn!.id, { diameter: value }));
@@ -378,8 +427,43 @@
     { label: '🧶 Carpet', ids: ['carpet-beige', 'carpet-gray'] },
   ];
 
-  let hasSelection = $derived(!!selectedWall || !!selectedDoor || !!selectedWindow || !!selectedFurniture || !!selectedRoom || !!selectedStair || !!selectedColumn || !!selectedTextAnnotation || !!selectedEntourage || (!is3D && hasBgImage));
+  let hasSelection = $derived(!!selectedWall || !!selectedDoor || !!selectedWindow || !!selectedFurniture || !!selectedRoom || !!selectedStair || !!selectedColumn || !!selectedFloorPlane || !!selectedTextAnnotation || !!selectedEntourage || (!is3D && hasBgImage));
 </script>
+
+{#snippet positionFields(
+  pos: { x: number; y: number },
+  save: (next: { x: number; y: number }) => void,
+  disabled = false,
+  labels?: { x: string; y: string },
+  validate: (next: { x: number; y: number }) => boolean = () => true,
+)}
+  <div class="grid grid-cols-2 gap-2">
+    <label class="block">
+      <span class="text-xs text-gray-500">{labels?.x ?? $t('objectProperties.positionX')} ({unitLabel()})</span>
+      <input
+        type="number"
+        value={displayValue(pos.x)}
+        step="any"
+        {disabled}
+        oninput={(e) => signedDimensionInput(e, pos.x, value => save({ x: value, y: pos.y }), value => validate({ x: value, y: pos.y }))}
+        onblur={(e) => signedDimensionInput(e, pos.x, value => save({ x: value, y: pos.y }), value => validate({ x: value, y: pos.y }))}
+        class="w-full px-2 py-1 border border-gray-200 rounded text-sm disabled:bg-gray-50 disabled:text-gray-400"
+      />
+    </label>
+    <label class="block">
+      <span class="text-xs text-gray-500">{labels?.y ?? $t('objectProperties.positionY')} ({unitLabel()})</span>
+      <input
+        type="number"
+        value={displayValue(pos.y)}
+        step="any"
+        {disabled}
+        oninput={(e) => signedDimensionInput(e, pos.y, value => save({ x: pos.x, y: value }), value => validate({ x: pos.x, y: value }))}
+        onblur={(e) => signedDimensionInput(e, pos.y, value => save({ x: pos.x, y: value }), value => validate({ x: pos.x, y: value }))}
+        class="w-full px-2 py-1 border border-gray-200 rounded text-sm disabled:bg-gray-50 disabled:text-gray-400"
+      />
+    </label>
+  </div>
+{/snippet}
 
 <!-- Right sidebar on md+; slides up as a bottom sheet on phones -->
 <div data-plan-properties class="{is3D ? 'w-80' : 'w-64'} shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-y-auto p-3 fixed md:static right-0 top-12 bottom-9 z-40 shadow-lg max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-h-[45vh] max-md:border-l-0 max-md:border-t max-md:rounded-t-xl max-md:shadow-2xl" class:hidden={!hasSelection}>
@@ -403,6 +487,20 @@
       </label>
       <p class="text-xs text-gray-500">{$t('wallProperties.joinedHelp')}</p>
       {#if invalidWallLength || wallLengthError}<p role="alert" class="text-xs text-red-700">{invalidWallLength ? $t('wallProperties.minimum') : wallLengthError}</p>{/if}
+      {@render positionFields(
+        selectedWall.start,
+        pos => updateWall(selectedWall!.id, { start: pos }),
+        false,
+        { x: $t('wallProperties.startX'), y: $t('wallProperties.startY') },
+        pos => Math.hypot(selectedWall!.end.x - pos.x, selectedWall!.end.y - pos.y) >= MIN_WALL_LENGTH,
+      )}
+      {@render positionFields(
+        selectedWall.end,
+        pos => updateWall(selectedWall!.id, { end: pos }),
+        false,
+        { x: $t('wallProperties.endX'), y: $t('wallProperties.endY') },
+        pos => Math.hypot(pos.x - selectedWall!.start.x, pos.y - selectedWall!.start.y) >= MIN_WALL_LENGTH,
+      )}
       <label class="block">
         <span class="text-xs text-gray-500">{$t('wallProperties.thickness')} ({unitLabel()})</span>
         <input type="number" value={displayValue(selectedWall.thickness)} oninput={onWallThickness} onblur={onWallThickness} step="any" class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
@@ -469,6 +567,14 @@
           {selectedWall.curvePoint ? $t('wallProperties.curveOn') : $t('wallProperties.curveOff')}
         </button>
       </div>
+      {#if selectedWall.curvePoint}
+        {@render positionFields(
+          selectedWall.curvePoint,
+          pos => updateWall(selectedWall!.id, { curvePoint: pos }),
+          false,
+          { x: $t('wallProperties.curveX'), y: $t('wallProperties.curveY') },
+        )}
+      {/if}
       <!-- Wall Material Tabs: Interior / Exterior -->
       <div>
         <div class="flex border-b border-gray-200 mb-3">
@@ -808,6 +914,7 @@
       <p class="text-xs text-gray-500">{$t('furnitureProperties.appearanceHelp')}</p>
       
       <!-- Rotation -->
+      {@render positionFields(selectedFurniture.position, pos => updateFurniture(selectedFurniture!.id, { position: pos }), !!selectedFurniture.locked)}
       <label class="block">
         <span class="text-xs text-gray-500">{$t('furnitureProperties.rotation')}</span>
         <input 
@@ -964,6 +1071,7 @@
         <span class="text-xs text-gray-500">{$t('symbolProperties.rotation')}</span>
         <input type="number" value={selectedEntourage.rotation} oninput={(e) => scalarInput(e, selectedEntourage!.rotation, value => updateEntourageItem(selectedEntourage!.id, { rotation: value }))} onblur={(e) => scalarInput(e, selectedEntourage!.rotation, value => updateEntourageItem(selectedEntourage!.id, { rotation: value }))} step="any" class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
       </label>
+      {@render positionFields(selectedEntourage.position, pos => updateEntourageItem(selectedEntourage!.id, { position: pos }), !!selectedEntourage.locked)}
       <label class="block">
         <span class="text-xs text-gray-500">{$t('symbolProperties.opacity', { percent: Math.round((selectedEntourage.opacity ?? 1) * 100) })}</span>
         <input type="range" min="0.1" max="1" step="0.05" value={selectedEntourage.opacity ?? 1} oninput={(e) => { if (selectedEntourage) updateEntourageItem(selectedEntourage.id, { opacity: Number((e.target as HTMLInputElement).value) }); }} class="w-full" />
@@ -1001,6 +1109,30 @@
         <span class="text-xs text-gray-500">{$t('stairProperties.risers')}</span>
         <input type="number" value={selectedStair.riserCount} min="3" max="30" step="1" oninput={onStairRisers} onblur={onStairRisers} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
       </label>
+      <div class="block">
+        <label for="stair-height-input" class="text-xs text-gray-500">{$t('stairProperties.height')} ({unitLabel()})</label>
+        <div class="flex gap-1.5 items-center">
+          <input
+            id="stair-height-input"
+            type="number"
+            value={selectedStair.height !== undefined ? displayValue(selectedStair.height) : ''}
+            placeholder={$t('stairProperties.heightAuto', { value: `${displayValue(autoStairRise)} ${unitLabel()}` })}
+            min="0"
+            step="any"
+            oninput={onStairHeight}
+            onblur={onStairHeight}
+            class="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-sm"
+          />
+          {#if selectedStair.height !== undefined}
+            <button
+              type="button"
+              onclick={() => updateStair(selectedStair!.id, { height: undefined })}
+              class="px-2 py-1 border border-gray-200 rounded text-xs text-gray-600 hover:bg-gray-50 transition-colors"
+              title={$t('stairProperties.resetHeight')}
+            >↺</button>
+          {/if}
+        </div>
+      </div>
       <div role="group" aria-label={$t('stairProperties.direction')}>
         <span class="text-xs text-gray-500">{$t('stairProperties.direction')}</span>
         <div class="flex gap-2">
@@ -1008,6 +1140,7 @@
           <button aria-pressed={selectedStair.direction === 'down'} onclick={() => updateStair(selectedStair!.id, { direction: 'down' })} class="flex-1 px-2 py-1.5 border rounded text-sm transition-colors {selectedStair.direction === 'down' ? 'bg-blue-100 border-blue-400 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}">{$t('stairProperties.down')}</button>
         </div>
       </div>
+      {@render positionFields(selectedStair.position, pos => updateStair(selectedStair!.id, { position: pos }))}
       <label class="block">
         <span class="text-xs text-gray-500">{$t('furnitureProperties.rotation')}</span>
         <input type="number" value={selectedStair.rotation} step="any" oninput={onStairRotation} onblur={onStairRotation} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
@@ -1051,12 +1184,103 @@
           <input type="color" aria-label={$t('furnitureProperties.customColor')} value={selectedColumn.color} oninput={(e) => updateColumn(selectedColumn!.id, { color: (e.target as HTMLInputElement).value })} class="w-8 h-6 rounded border border-gray-200 cursor-pointer" />
         </div>
       </div>
+      {@render positionFields(selectedColumn.position, pos => updateColumn(selectedColumn!.id, { position: pos }))}
       {#if selectedColumn.shape === 'square'}
         <label class="block">
           <span class="text-xs text-gray-500">{$t('furnitureProperties.rotation')}</span>
           <input type="number" value={selectedColumn.rotation} oninput={(e) => scalarInput(e, selectedColumn!.rotation, value => updateColumn(selectedColumn!.id, { rotation: value }))} onblur={(e) => scalarInput(e, selectedColumn!.rotation, value => updateColumn(selectedColumn!.id, { rotation: value }))} step="any" class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
         </label>
       {/if}
+    </div>
+  {:else if selectedFloorPlane}
+    <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+      <span class="w-6 h-6 bg-amber-100 rounded flex items-center justify-center text-xs">▬</span>
+      {$t('floorPlaneProperties.heading')}
+      <button
+        onclick={() => { if (selectedFloorPlane) updateFloorPlane(selectedFloorPlane.id, { locked: !selectedFloorPlane.locked }); }}
+        class="ml-auto px-1.5 py-0.5 rounded text-xs border transition-colors {selectedFloorPlane.locked ? 'bg-amber-100 border-amber-400 text-amber-700' : 'border-gray-200 hover:bg-gray-50 text-gray-500'}"
+        title={selectedFloorPlane.locked ? $t('furnitureProperties.unlock') : $t('furnitureProperties.lock')}
+      >{selectedFloorPlane.locked ? `🔒 ${$t('furnitureProperties.locked')}` : '🔓'}</button>
+    </h3>
+    <div class="space-y-3">
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('floorPlaneProperties.width')} ({unitLabel()})</span>
+        <input type="number" value={displayValue(selectedFloorPlane.width)} min="0" step="any" oninput={onFloorPlaneWidth} onblur={onFloorPlaneWidth} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
+      </label>
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('floorPlaneProperties.height')} ({unitLabel()})</span>
+        <input type="number" value={displayValue(selectedFloorPlane.height)} min="0" step="any" oninput={onFloorPlaneHeight} onblur={onFloorPlaneHeight} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
+      </label>
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('floorPlaneProperties.thickness')} ({unitLabel()})</span>
+        <input type="number" value={displayValue(selectedFloorPlane.thickness)} min="0" step="any" oninput={onFloorPlaneThickness} onblur={onFloorPlaneThickness} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
+      </label>
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('floorPlaneProperties.elevation')} ({unitLabel()})</span>
+        <input type="number" value={displayValue(selectedFloorPlane.elevation ?? 0)} step="any" oninput={onFloorPlaneElevation} onblur={onFloorPlaneElevation} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
+      </label>
+      {@render positionFields(selectedFloorPlane.position, pos => updateFloorPlane(selectedFloorPlane!.id, { position: pos }), !!selectedFloorPlane.locked)}
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('furnitureProperties.rotation')}</span>
+        <input type="number" value={selectedFloorPlane.rotation} step="any" oninput={onFloorPlaneRotation} onblur={onFloorPlaneRotation} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
+      </label>
+      <div>
+        <span class="text-xs text-gray-500 mb-1.5 block">{$t('furnitureProperties.color')}</span>
+        <div class="grid grid-cols-5 gap-1.5 mb-2">
+          {#each roomColorPresets as preset}
+            <button
+              class="w-6 h-6 rounded border-2 hover:border-gray-300 transition-colors {(selectedFloorPlane.color ?? '#e2d6c3') === preset.color ? 'border-blue-500 ring-1 ring-blue-200' : 'border-gray-200'}"
+              style="background-color: {preset.color}"
+              title={$t(roomColorLabels[preset.name])}
+              onclick={() => updateFloorPlane(selectedFloorPlane!.id, { color: preset.color })}
+            ></button>
+          {/each}
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">{$t('furnitureProperties.custom')}</span>
+          <input
+            type="color"
+            aria-label={$t('furnitureProperties.customColor')}
+            value={selectedFloorPlane.color ?? '#e2d6c3'}
+            oninput={(e) => updateFloorPlane(selectedFloorPlane!.id, { color: (e.target as HTMLInputElement).value })}
+            class="w-8 h-6 rounded border border-gray-200 cursor-pointer"
+          />
+        </div>
+      </div>
+      <div role="group" aria-label={$t('floorPlaneProperties.material')}>
+        <span class="text-xs text-gray-500 mb-1.5 block">{$t('floorPlaneProperties.material')}</span>
+        <div class="space-y-3">
+          {#each textureGroups as group}
+            <div>
+              <span class="text-xs font-medium text-gray-600 mb-1.5 block">{$t(floorGroupLabels[group.label])}</span>
+              <div class="grid grid-cols-3 gap-1.5">
+                {#each group.ids as matId}
+                  {@const mat = floorMaterials.find(m => m.id === matId)}
+                  {#if mat}
+                    {@const texPath = floorTexPaths[mat.id] ?? ''}
+                    <button
+                      class="p-1 rounded-lg border-2 hover:border-gray-300 transition-all text-xs {(selectedFloorPlane.floorTexture ?? 'none') === mat.id ? 'border-blue-500 ring-2 ring-blue-200 shadow-sm' : 'border-gray-200'}"
+                      title={$t(floorMaterialLabels[mat.id])}
+                      aria-pressed={(selectedFloorPlane.floorTexture ?? 'none') === mat.id}
+                      onclick={() => updateFloorPlane(selectedFloorPlane!.id, { floorTexture: mat.id })}
+                    >
+                      <div
+                        class="w-full h-12 rounded-md mb-1 overflow-hidden"
+                        style={texPath ? `background-image: url(${texPath}); background-size: cover; background-position: center;` : `background-color: ${mat.id === 'none' ? (selectedFloorPlane.color ?? mat.color) : mat.color}`}
+                      ></div>
+                      <div class="text-center leading-3 text-[10px] text-gray-600 truncate">{$t(floorMaterialLabels[mat.id])}</div>
+                    </button>
+                  {/if}
+                {/each}
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+      <button
+        onclick={() => removeElement(selectedFloorPlane!.id)}
+        class="w-full px-2 py-1.5 border border-red-300 rounded text-sm text-red-600 hover:bg-red-50 transition-colors"
+      >{$t('symbolProperties.delete')}</button>
     </div>
   {:else if selectedTextAnnotation}
     <div class="space-y-3">

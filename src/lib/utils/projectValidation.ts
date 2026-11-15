@@ -140,9 +140,16 @@ export function readProject(value: unknown): Project {
     });
     elements('stairs', (item, path) => {
       positioned(item, path); positive(item.width, `${path}.width`); positive(item.depth, `${path}.depth`);
+      if (item.height !== undefined) positive(item.height, `${path}.height`);
       if (!Number.isSafeInteger(item.riserCount) || item.riserCount < 1) fail(`${path}.riserCount`, 'must be a positive integer');
       defaults(item, { stairType: 'straight', direction: 'up' });
       choice(item.stairType, ['straight', 'l-shaped', 'u-shaped', 'spiral'], `${path}.stairType`); choice(item.direction, ['up', 'down'], `${path}.direction`);
+    });
+    if (floor.floorPlanes !== undefined) elements('floorPlanes', (item, path) => {
+      positioned(item, path); positive(item.width, `${path}.width`); positive(item.height, `${path}.height`); positive(item.thickness, `${path}.thickness`);
+      if (item.elevation !== undefined) number(item.elevation, `${path}.elevation`);
+      strings(item, ['color', 'floorTexture'], path);
+      booleans(item, ['locked'], path);
     });
     elements('columns', (item, path) => {
       positioned(item, path); positive(item.diameter, `${path}.diameter`); number(item.height, `${path}.height`, 0);

@@ -5,6 +5,7 @@ import { hasPlanExportContent } from './planExportContent';
 /** The 2D view's layer switches (`layerVisibility` in stores/project.ts): the Layers panel, the status bar's Layers popover and the Furniture buttons. */
 export interface PlanLayerSwitches {
   walls: boolean; doors: boolean; windows: boolean; furniture: boolean; stairs: boolean; columns: boolean;
+  floorPlanes?: boolean;
   entourage: boolean; measurements: boolean; annotations: boolean; textAnnotations: boolean;
   /** Room names and areas (status bar → Layers → Room Labels). */
   roomLabels: boolean;
@@ -21,8 +22,8 @@ export interface PlanExportVisibility extends PlanLayerSwitches {
 /** Map the 2D view's switches to what the exports draw, so a file shows what the plan shows. */
 export function planExportVisibility(layers: PlanLayerSwitches,
   settings: Pick<ProjectSettings, 'showDimensions' | 'showExternalDimensions' | 'showInternalDimensions'>): PlanExportVisibility {
-  const { walls, doors, windows, furniture, stairs, columns, entourage, measurements, annotations, textAnnotations, roomLabels } = layers;
-  return { walls, doors, windows, furniture, stairs, columns, entourage, measurements, annotations, textAnnotations, roomLabels,
+  const { walls, doors, windows, furniture, stairs, columns, floorPlanes, entourage, measurements, annotations, textAnnotations, roomLabels } = layers;
+  return { walls, doors, windows, furniture, stairs, columns, floorPlanes, entourage, measurements, annotations, textAnnotations, roomLabels,
     wallDimensions: walls && settings.showDimensions && settings.showExternalDimensions,
     roomDimensions: settings.showDimensions && settings.showInternalDimensions };
 }
@@ -38,6 +39,7 @@ export function visiblePlanFloor(floor: Floor, visibility: PlanExportVisibility)
     furniture: visibility.furniture ? floor.furniture : [],
     stairs: visibility.stairs ? floor.stairs : [],
     columns: visibility.columns ? floor.columns : [],
+    floorPlanes: visibility.floorPlanes !== false ? floor.floorPlanes : [],
     entourage: visibility.entourage ? floor.entourage : [],
     measurements: visibility.measurements ? floor.measurements : [],
     annotations: visibility.annotations ? floor.annotations : [],

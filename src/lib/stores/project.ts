@@ -4,7 +4,7 @@ import { splitWallGeometry } from '$lib/utils/splitWallGeometry';
 import { wallPathProfile } from '$lib/utils/wallProfiles';
 import { duplicatePlanSelection, pastePlanSelection, shiftedOpeningPosition } from '$lib/utils/duplicateSelection';
 import { writable, derived, get, type Writable } from 'svelte/store';
-import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem, InterchangeState } from '$lib/models/types';
+import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, FloorPlane, BackgroundImage, GuideLine, ElementGroup, EntourageItem, InterchangeState } from '$lib/models/types';
 import { planWallResize, finitePoint, validPositiveDimension, validOpeningPosition, type WallEndpoint } from '$lib/utils/wallEditing';
 import { getOuterWalls } from '$lib/utils/outerWalls';
 import { nextFloorLevel, floorElevations, validFloorElevation, orderedFloors, DEFAULT_FLOOR_SPACING } from '$lib/utils/floors';
@@ -53,6 +53,7 @@ export function activateMeasurementTool(tool: 'measure' | 'annotate') {
   placingFurnitureId.set(null);
   placingStair.set(false);
   placingColumn.set(false);
+  placingFloorPlane.set(false);
   placingEntourageId.set(null);
   calibrationMode.set(false);
   doorJoinMode.set(null);
@@ -247,6 +248,7 @@ function clearFloorContext() {
   placingFurnitureId.set(null);
   placingStair.set(false);
   placingColumn.set(false);
+  placingFloorPlane.set(false);
   placingEntourageId.set(null);
 }
 
@@ -254,7 +256,7 @@ function clearFloorContext() {
 function pruneFloorContext(project: Project) {
   const floor = project.floors.find(f => f.id === project.activeFloorId) ?? project.floors[0];
   if (!floor) return;
-  const ids = new Set([floor.walls, floor.doors, floor.windows, floor.furniture, floor.stairs ?? [], floor.columns ?? [], floor.guides ?? [],
+  const ids = new Set([floor.walls, floor.doors, floor.windows, floor.furniture, floor.stairs ?? [], floor.columns ?? [], floor.floorPlanes ?? [], floor.guides ?? [],
     floor.measurements ?? [], floor.annotations ?? [], floor.textAnnotations ?? [], floor.entourage ?? []].flat().map(item => item.id));
   const prune = (store: Writable<string | null>, known: Set<string>) => {
     const id = get(store);
@@ -454,7 +456,7 @@ export function rotateSelection(ids: ReadonlySet<string>, degrees = 15) {
   const updates = selectionRotation(floor,ids,degrees,project.customEntourage);
   if (!updates.size) return;
   mutate(f => {
-    for (const item of [...f.furniture,...f.stairs ?? [],...f.columns ?? [],...f.entourage ?? []]) {
+    for (const item of [...f.furniture,...f.stairs ?? [],...f.columns ?? [],...f.floorPlanes ?? [],...f.entourage ?? []]) {
       const update = updates.get(item.id);
       if (update) Object.assign(item,update);
     }
@@ -524,10 +526,13 @@ export function addStair(position: Point): string {
 }
 
 export function updateStair(id: string, updates: Partial<Stair>) {
+  if ('height' in updates && updates.height !== undefined && !validPositiveDimension(updates.height)) return;
   mutate((f) => {
     if (!f.stairs) return;
     const s = f.stairs.find((s) => s.id === id);
-    if (s) Object.assign(s, updates);
+    if (!s) return;
+    Object.assign(s, updates);
+    if (s.height === undefined) delete s.height;
   }, undefined, coalesceKeyFor('stair', id, updates));
 }
 
@@ -608,6 +613,63 @@ export const placingColumnShape = writable<'round' | 'square'>('round');
 
 /** Tool for placing stairs */
 export const placingStair = writable<boolean>(false);
+
+/** Tool for placing horizontal floor planes */
+export const placingFloorPlane = writable<boolean>(false);
+
+export function addFloorPlane(
+  position: Point,
+  options?: Partial<Pick<FloorPlane, 'width' | 'height' | 'thickness' | 'elevation' | 'color' | 'floorTexture'>>,
+): string {
+  const id = uid();
+  mutate((f) => {
+    if (!f.floorPlanes) f.floorPlanes = [];
+    f.floorPlanes.push({
+      id,
+      position,
+      rotation: 0,
+      width: options?.width ?? 400,
+      height: options?.height ?? 400,
+      thickness: options?.thickness ?? 20,
+      elevation: options?.elevation ?? 0,
+      color: options?.color ?? '#d6d3d1',
+      floorTexture: options?.floorTexture ?? 'none',
+    });
+  }, 'Added floor plane');
+  return id;
+}
+
+export function updateFloorPlane(id: string, updates: Partial<FloorPlane>) {
+  mutate((f) => {
+    if (!f.floorPlanes) return;
+    const fp = f.floorPlanes.find((item) => item.id === id);
+    if (!fp) return;
+    Object.assign(fp, updates);
+    if (fp.locked === undefined) delete fp.locked;
+    if (fp.elevation === undefined) delete fp.elevation;
+    if (fp.color === undefined) delete fp.color;
+    if (fp.floorTexture === undefined) delete fp.floorTexture;
+  }, undefined, coalesceKeyFor('floorPlane', id, updates));
+}
+
+export function removeFloorPlane(id: string) {
+  mutate((f) => {
+    if (!f.floorPlanes) return;
+    f.floorPlanes = f.floorPlanes.filter((item) => item.id !== id);
+  });
+}
+
+export function moveFloorPlane(id: string, position: Point) {
+  const p = get(currentProject);
+  if (!p) return;
+  const floor = p.floors.find((f) => f.id === p.activeFloorId);
+  const fp = floor?.floorPlanes?.find((item) => item.id === id);
+  if (fp && !samePoint(fp.position, position)) {
+    fp.position = position;
+    p.updatedAt = new Date();
+    currentProject.set({ ...p });
+  }
+}
 
 // --- Entourage (2D presentation symbols) ---
 export const placingEntourageId = writable<string | null>(null);
@@ -710,6 +772,7 @@ export function removeElement(id: string) {
     f.furniture = f.furniture.filter((fi) => fi.id !== id);
     if (f.stairs) f.stairs = f.stairs.filter((s) => s.id !== id);
     if (f.columns) f.columns = f.columns.filter((c) => c.id !== id);
+    if (f.floorPlanes) f.floorPlanes = f.floorPlanes.filter((fp) => fp.id !== id);
     if (f.textAnnotations) f.textAnnotations = f.textAnnotations.filter((t) => t.id !== id);
     if (f.measurements) f.measurements = f.measurements.filter(item => item.id !== id);
     if (f.annotations) f.annotations = f.annotations.filter(item => item.id !== id);
@@ -1463,8 +1526,8 @@ export function moveTextAnnotation(id: string, position: { x: number; y: number 
 
 // Layer visibility store (used by LayersPanel, FloorPlanCanvas and the plan exports)
 /** `floorBelow` is the dimmed reference underlay of the storey beneath the active one; `roomLabels` shows room names and areas. */
-export const layerVisibility = writable<{ walls: boolean; doors: boolean; windows: boolean; furniture: boolean; stairs: boolean; columns: boolean; guides: boolean; measurements: boolean; annotations: boolean; textAnnotations: boolean; entourage: boolean; floorBelow: boolean; roomLabels: boolean }>({
-  walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true,
+export const layerVisibility = writable<{ walls: boolean; doors: boolean; windows: boolean; furniture: boolean; stairs: boolean; columns: boolean; floorPlanes: boolean; guides: boolean; measurements: boolean; annotations: boolean; textAnnotations: boolean; entourage: boolean; floorBelow: boolean; roomLabels: boolean }>({
+  walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, floorPlanes: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true,
 });
 
 // --- Lock ---
@@ -1472,11 +1535,11 @@ export const layerVisibility = writable<{ walls: boolean; doors: boolean; window
 export function toggleSelectionLock(ids: ReadonlySet<string>) {
   const floor = get(activeFloor);
   if (!floor) return;
-  const items = [...floor.furniture, ...floor.entourage ?? []].filter(item => ids.has(item.id));
+  const items = [...floor.furniture, ...floor.entourage ?? [], ...floor.floorPlanes ?? []].filter(item => ids.has(item.id));
   if (!items.length) return;
   const locked = items.some(item => !item.locked);
   mutate(f => {
-    for (const item of [...f.furniture, ...f.entourage ?? []]) {
+    for (const item of [...f.furniture, ...f.entourage ?? [], ...f.floorPlanes ?? []]) {
       if (ids.has(item.id)) item.locked = locked;
     }
   }, locked ? 'Locked selection' : 'Unlocked selection');

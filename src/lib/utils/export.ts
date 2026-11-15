@@ -6,6 +6,7 @@ import { getEntourageDef } from './entourageCatalog';
 import { entouragePlanBounds } from './entouragePlanBounds';
 import { planContentBounds } from './planContentBounds';
 import { columnPlanBounds } from './columnPlanGeometry';
+import { floorPlaneBounds } from './floorPlaneGeometry';
 import { hasPlanExportContent } from './planExportContent';
 import { dimensionPlanGeometry } from './dimensionPlanGeometry';
 import { textAnnotationBounds, textAnnotationLines } from './textAnnotationLayout';
@@ -21,7 +22,7 @@ import { wallDimensionLabel } from './wallDimensionLabel';
 import type { Project, Floor, FurnitureItem } from '$lib/models/types';
 import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
 import { resolveRooms, getRoomPolygon, roomLabelPosition } from '$lib/utils/roomDetection';
-import { drawStair, drawFurnitureItem, drawColumn, drawDoorOnWall, drawWindowOnWall, drawEntourageItems, drawTextAnnotations, drawAnnotations, drawPersistedMeasurements } from '$lib/utils/canvasRenderer';
+import { drawStair, drawFurnitureItem, drawColumn, drawFloorPlane, drawDoorOnWall, drawWindowOnWall, drawEntourageItems, drawTextAnnotations, drawAnnotations, drawPersistedMeasurements } from '$lib/utils/canvasRenderer';
 import type { CanvasState } from '$lib/utils/canvasInteraction';
 import { projectSettings, formatArea, formatLength } from '$lib/stores/settings';
 import { currentPlanExportVisibility } from '$lib/stores/planVisibility';
@@ -132,6 +133,11 @@ function extendBoundsForStairs(floor: Floor, bounds: { minX: number; minY: numbe
 function extendBoundsForColumns(floor: Floor, bounds: { minX: number; minY: number; maxX: number; maxY: number }) {
   for (const column of floor.columns ?? []) {
     const b = columnPlanBounds(column);
+    bounds.minX = Math.min(bounds.minX, b.minX); bounds.minY = Math.min(bounds.minY, b.minY);
+    bounds.maxX = Math.max(bounds.maxX, b.maxX); bounds.maxY = Math.max(bounds.maxY, b.maxY);
+  }
+  for (const plane of floor.floorPlanes ?? []) {
+    const b = floorPlaneBounds(plane);
     bounds.minX = Math.min(bounds.minX, b.minX); bounds.minY = Math.min(bounds.minY, b.minY);
     bounds.maxX = Math.max(bounds.maxX, b.maxX); bounds.maxY = Math.max(bounds.maxY, b.maxY);
   }
@@ -250,6 +256,8 @@ export async function exportAsPNG(canvas: HTMLCanvasElement | null, project?: Pr
       ctx.scale(scale, scale);
       ctx.fillStyle = 'white';
       ctx.fillRect(0, 0, w, h);
+
+      for (const plane of floor.floorPlanes ?? []) drawFloorPlane({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, plane, false);
 
       // Draw room fills
       const ROOM_COLORS = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#ddd6fe', '#a5f3fc', '#fed7aa'];
@@ -382,6 +390,12 @@ export function exportAsSVG(project: Project, language: Locale = 'en', visibilit
   const vh = maxY - minY + pad * 2;
 
   let paths = '';
+
+  for (const plane of floor.floorPlanes ?? []) {
+    const x = plane.position.x - minX + pad, y = plane.position.y - minY + pad;
+    paths += `  <g data-floor-plane="${escapeXml(plane.id)}" transform="translate(${x},${y}) rotate(${plane.rotation || 0})">\n`;
+    paths += `    <rect x="${-plane.width / 2}" y="${-plane.height / 2}" width="${plane.width}" height="${plane.height}" fill="${escapeXml(plane.color || '#d6d3d1')}" fill-opacity="0.35" stroke="#78716c" stroke-width="1.25"/>\n  </g>\n`;
+  }
 
   // Room fills
   const ROOM_COLORS_SVG = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#ddd6fe', '#a5f3fc', '#fed7aa'];

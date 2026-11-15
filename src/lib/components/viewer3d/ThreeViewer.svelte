@@ -10,12 +10,24 @@
   import { openAISettings, setOpenAIModel } from '$lib/stores/aiKeys';
   import { generateOpenAIRenderImage, validateOpenAIConfig, getEffectiveModel, normalizeBaseUrl } from '$lib/utils/openaiClient';
   import OpenAIModelPicker from '$lib/components/ai/OpenAIModelPicker.svelte';
-  import { activeFloor, currentProject, selectedElementId } from '$lib/stores/project';
+  import {
+    activeFloor,
+    currentProject,
+    selectedElementId,
+    setActiveFloor,
+    addFurniture,
+    moveWallEndpoint,
+    moveWallGeometryDuringDrag,
+    removeElement,
+    beginUndoGroup,
+    endUndoGroup,
+  } from '$lib/stores/project';
   import { triggerTip } from '$lib/stores/onboarding.svelte';
   import type { Floor, Wall, Door, Window as Win, Stair, Point } from '$lib/models/types';
   import { getWallStartHeight, getWallEndHeight } from '$lib/models/types';
   import { wallColors, type WallColor } from '$lib/utils/materials';
   import { projectSettings, formatArea } from '$lib/stores/settings';
+  import { connectedWallEndpoints, MIN_WALL_LENGTH } from '$lib/utils/wallEditing';
   import * as THREE from 'three';
   import { createRoomSlabGeometry } from '$lib/utils/roomSlabGeometry';
   import { roomHoles } from '$lib/utils/roomNesting';
@@ -33,18 +45,19 @@
   import { SPIRAL_START_ANGLE, SPIRAL_SWEEP, stairFlights } from '$lib/utils/stairPlanGeometry';
   import { framingContext, shouldFrameScene, type FramingContext } from '$lib/utils/sceneFraming';
   import { WalkthroughMotion } from '$lib/utils/walkthroughMotion';
+  import { FreeFlyMotion } from '$lib/utils/freeFlyMotion';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
   import { getCatalogItem, furnitureCatalog, furnitureCategories } from '$lib/utils/furnitureCatalog';
   import type { FurnitureDef } from '$lib/utils/furnitureCatalog';
   import { createWallHighlight } from '$lib/utils/wallHighlight';
+  import { closestWallIds, createWallFade } from '$lib/utils/closestWalls';
   import { applyWallXray } from '$lib/utils/wallXray';
   import { disposeModel } from '$lib/utils/furnitureModelResources';
   import { ownColorCanvasTexture, refreshBackgroundTexture } from '$lib/utils/viewerTextures';
   import { gpuName, rememberShadowsLost, shadowsSupported } from '$lib/utils/viewerShadows';
   import { createFurnitureModelWithGLB, createPlacedFurnitureModel } from '$lib/utils/furnitureModelLoader';
   import { placedFurnitureY } from '$lib/utils/furnitureElevation';
-  import { addFurniture } from '$lib/stores/project';
   import { detectRooms, resolveRoomGeometry, getRoomPolygon, roomCentroid, roomLabelPosition } from '$lib/utils/roomDetection';
   import { getMaterial } from '$lib/utils/materials';
   import { doorFrameBoxes, windowOuterBars } from '$lib/utils/openingFrames';
@@ -83,20 +96,59 @@
   let renderedSignature: string | null = null;
   let framedContext: FramingContext | null = null;
   let wallGroup: THREE.Group;
+  let wallHandleGroup: THREE.Group;
 
   // Raycasting for wall selection in 3D
   const raycaster = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
   const wallMeshMap = new Map<THREE.Object3D, string>(); // mesh → wallId
-  let selectedWallId3D: string | null = null;
+  let selectedWallId3D = $state<string | null>(null);
   const wallHighlight = createWallHighlight();
+  const wallFade = createWallFade(0.2);
+  let activeCutawayMeshes: THREE.Mesh[] = [];
+  let activeCutawayWallIds: string[] = [];
 
-  // 3D Edit mode — enables click-to-select
+  function sameWallIds(a: readonly string[], b: readonly string[]): boolean {
+    return a.length === b.length && a.every((id, i) => id === b[i]);
+  }
+
+  function syncClosestWallFade(force = false) {
+    if (!camera) return;
+    const nextIds = wallsTransparent || !currentFloor
+      ? []
+      : closestWallIds(currentFloor.walls, camera.position, activeFloorElevation, 2);
+    if (!force && sameWallIds(nextIds, activeCutawayWallIds)) return;
+    activeCutawayWallIds = nextIds;
+    wallHighlight.clear();
+    wallFade.apply(activeCutawayMeshes, new Set(nextIds));
+    wallHighlight.apply(wallMeshMap, selectedWallId3D);
+  }
+
+  interface WallDragState {
+    kind: 'start' | 'end' | 'curve' | 'move';
+    wallId: string;
+    floorId: string;
+    downClientX: number;
+    downClientY: number;
+    undoStarted: boolean;
+    dragPlane: THREE.Plane;
+    startHitX: number;
+    startHitZ: number;
+    origStart: Point;
+    origEnd: Point;
+    origCurve?: Point;
+    connectedStart: { wallId: string; endpoint: 'start' | 'end' }[];
+    connectedEnd: { wallId: string; endpoint: 'start' | 'end' }[];
+  }
+  let dragWallState: WallDragState | null = null;
+  let suppressNextWallClick = false;
+
+  // 3D Edit mode — enables furniture placement & direct wall-body drag
   let editMode = $state(false);
   // Wall transparency toggle
   let wallsTransparent = $state(false);
-  // Multi-floor stacking
-  let showAllFloors = $state(false);
+  // Render whole multi-floor building at once by default, with other floors translucent
+  let showAllFloors = $state(true);
   // How the floors other than the active one are drawn while stacked (issue #130).
   let otherFloorsStyle = $state<StackedFloorsStyle>('translucent');
   const OTHER_FLOOR_STYLES: { style: StackedFloorsStyle; label: TranslationKey }[] = [
@@ -126,6 +178,12 @@
   let moveSpeed = $state(800);
   let sprintSpeed = $state(1600);
   let eyeHeight = $state(160); // cm
+
+  // Minecraft-style free-fly mode
+  let flyMode = $state(false);
+  let flySpeed = $state(600); // cm/s
+  const freeFlyMotion = new FreeFlyMotion();
+  let flyDragLookStart: { x: number; y: number } | null = null;
 
   // Lighting controls state
   let lightingPanelOpen = $state(false);
@@ -533,6 +591,9 @@
     scene.traverse(obj => {
       if (obj instanceof THREE.Sprite) { sprites.set(obj, obj.visible); obj.visible = false; }
     });
+    wallHighlight.clear();
+    wallFade.clear();
+    activeCutawayWallIds = [];
     try {
       if (cameraHelper) cameraHelper.visible = false;
       if (xray) setWallsXray(true);
@@ -541,6 +602,7 @@
       if (xray) setWallsXray(false);
       if (cameraHelper) cameraHelper.visible = helperVisible;
       for (const [sprite, visible] of sprites) sprite.visible = visible;
+      syncClosestWallFade(true);
     }
   }
 
@@ -679,8 +741,9 @@
 
   function exitWalkthroughMode() {
     walkthroughMode = false;
-    controls.enabled = true;
+    controls.enabled = !flyMode;
     walkthroughMotion.reset();
+    updateWallHandles();
     markSceneDirty();
 
     if (typeof document !== 'undefined' && document.pointerLockElement) {
@@ -688,10 +751,72 @@
     }
   }
 
+  function exitFlyMode() {
+    flyMode = false;
+    flyDragLookStart = null;
+    freeFlyMotion.reset();
+    if (controls && camera) {
+      const forward = new THREE.Vector3(0, 0, -300).applyQuaternion(camera.quaternion);
+      controls.target.copy(camera.position).add(forward);
+      controls.enabled = !walkthroughMode;
+      controls.update();
+    }
+    updateWallHandles();
+    markSceneDirty();
+
+    if (typeof document !== 'undefined' && document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  }
+
+  function enterFlyMode() {
+    if (walkthroughMode) exitWalkthroughMode();
+    cancelWallDrag();
+    orbitGlide = null;
+    cancelAIRender();
+    cameraPlacementMode = false;
+    cameraPreviewOpen = false;
+    furniturePlacementMode = false;
+    removeGhostPreview();
+    flyMode = true;
+    flyDragLookStart = null;
+    freeFlyMotion.reset();
+    controls.enabled = false;
+    updateWallHandles();
+
+    // Ensure camera quaternion uses level YXZ roll before flying
+    const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+    euler.z = 0;
+    camera.quaternion.setFromEuler(euler);
+
+    try {
+      Promise.resolve(renderer.domElement.requestPointerLock()).catch(() => {});
+    } catch {
+      // Drag-to-look on the canvas remains active when pointer lock is unavailable
+    }
+    markSceneDirty();
+  }
+
+  function toggleFlyMode() {
+    if (flyMode) exitFlyMode();
+    else enterFlyMode();
+  }
+
   function onKeyDown(event: KeyboardEvent) {
     if (hasOpenModal()) return;
-    // ESC exits edit mode
-    if (event.code === 'Escape' && editMode && !walkthroughMode) {
+    if (event.code === 'Escape') {
+      if (dragWallState) {
+        cancelWallDrag();
+        return;
+      }
+      if (flyMode) {
+        exitFlyMode();
+        return;
+      }
+      if (walkthroughMode) {
+        exitWalkthroughMode();
+        return;
+      }
       if (furniturePlacementMode) {
         furniturePlacementMode = false;
         furniturePickerOpen = false;
@@ -699,12 +824,35 @@
         removeGhostPreview();
         return;
       }
-      editMode = false;
-      selectedElementId.set(null);
+      if (editMode || selectedWallId3D) {
+        editMode = false;
+        selectedElementId.set(null);
+        return;
+      }
       return;
     }
+
+    if ((event.code === 'Delete' || event.code === 'Backspace') && selectedWallId3D && !walkthroughMode && !flyMode) {
+      if (isWalkthroughField(event.target)) return;
+      event.preventDefault();
+      const targetId = selectedWallId3D;
+      cancelWallDrag();
+      selectedElementId.set(null);
+      removeElement(targetId);
+      return;
+    }
+
+    if (flyMode) {
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey
+        || isWalkthroughField(event.target)) return;
+      if (freeFlyMotion.setKey(event.code, true, event.repeat)) {
+        event.preventDefault();
+        wakeFly();
+      }
+      return;
+    }
+
     if (!walkthroughMode) return;
-    if (event.code === 'Escape') { exitWalkthroughMode(); return; }
     if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey
       || isWalkthroughField(event.target)) return;
     if (walkthroughMotion.setKey(event.code, true, event.repeat)) {
@@ -714,6 +862,11 @@
   }
 
   function onKeyUp(event: KeyboardEvent) {
+    if (flyMode) {
+      freeFlyMotion.setKey(event.code, false);
+      wakeFly();
+      return;
+    }
     walkthroughMotion.setKey(event.code, false);
     wakeWalkthrough();
   }
@@ -725,8 +878,17 @@
     }
   }
 
+  function wakeFly() {
+    if (flyMode && freeFlyMotion.active) {
+      freeFlyMotion.startClock(performance.now());
+      requestRender();
+    }
+  }
+
   function resetWalkthroughInput() {
     walkthroughMotion.reset();
+    freeFlyMotion.reset();
+    flyDragLookStart = null;
   }
 
   function isWalkthroughField(target: EventTarget | null) {
@@ -850,23 +1012,133 @@
     // Mark dirty when orbit controls move the camera
     controls.addEventListener('change', markSceneDirty);
 
-    // Click-to-select walls via raycasting
-    let pointerDownPos = { x: 0, y: 0 };
-    renderer.domElement.addEventListener('pointerdown', (e) => {
-      pointerDownPos = { x: e.clientX, y: e.clientY };
-    });
-    renderer.domElement.addEventListener('pointerup', (e) => {
-      // Only select in edit mode, and only if mouse didn't move much (not a drag/orbit)
-      if (!editMode) return;
-      const dx = e.clientX - pointerDownPos.x;
-      const dy = e.clientY - pointerDownPos.y;
-      if (Math.hypot(dx, dy) > 5) return;
-      if (walkthroughMode) return;
+    function snapCoord(value: number): number {
+      const s = get(projectSettings);
+      if (!s.snapToGrid || !(s.gridSize > 0)) return value;
+      return Math.round(value / s.gridSize) * s.gridSize;
+    }
 
+    function updateRayMouse(e: PointerEvent | MouseEvent) {
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
+    }
+
+    function pickWallHit(intersects: THREE.Intersection[]): { wallId: string; floorId?: string } | null {
+      const wallId = pickedWallId(intersects, otherFloorsStyle);
+      if (!wallId) return null;
+      const hit = intersects.find(entry => entry.object.userData.wallId === wallId);
+      const floorId = typeof hit?.object.userData.floorId === 'string' ? hit.object.userData.floorId : undefined;
+      return { wallId, floorId };
+    }
+
+    function finishWallDrag() {
+      if (!dragWallState) return;
+      const didUndo = dragWallState.undoStarted;
+      const actionLabel = dragWallState.kind === 'move'
+        ? 'Moved wall'
+        : dragWallState.kind === 'curve'
+          ? 'Reshaped curved wall'
+          : 'Resized wall';
+      dragWallState = null;
+      controls.enabled = !walkthroughMode && !flyMode;
+      if (didUndo) {
+        endUndoGroup(actionLabel);
+        suppressNextWallClick = true;
+      }
+      renderer.domElement.style.cursor = '';
+    }
+
+    // Wall handle dragging & click-to-select walls via raycasting
+    let pointerDownPos = { x: 0, y: 0 };
+    renderer.domElement.addEventListener('pointerdown', (e) => {
+      pointerDownPos = { x: e.clientX, y: e.clientY };
+
+      if (flyMode && e.button === 0 && document.pointerLockElement !== renderer.domElement) {
+        flyDragLookStart = { x: e.clientX, y: e.clientY };
+        return;
+      }
+
+      if (e.button !== 0 || walkthroughMode || flyMode || cameraPlacementMode || furniturePlacementMode) return;
+      updateRayMouse(e);
+
+      const handleHits = wallHandleGroup ? raycaster.intersectObjects(wallHandleGroup.children, false) : [];
+      const handleHit = handleHits.find(h => typeof h.object.userData.handleKind === 'string' && typeof h.object.userData.wallId === 'string');
+      if (handleHit && currentFloor) {
+        const wallId = handleHit.object.userData.wallId as string;
+        const kind = handleHit.object.userData.handleKind as 'start' | 'end' | 'curve' | 'move';
+        const wall = currentFloor.walls.find(w => w.id === wallId);
+        if (wall) {
+          dragWallState = {
+            kind,
+            wallId,
+            floorId: currentFloor.id,
+            downClientX: e.clientX,
+            downClientY: e.clientY,
+            undoStarted: false,
+            dragPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -handleHit.point.y),
+            startHitX: handleHit.point.x,
+            startHitZ: handleHit.point.z,
+            origStart: { ...wall.start },
+            origEnd: { ...wall.end },
+            origCurve: wall.curvePoint ? { ...wall.curvePoint } : undefined,
+            connectedStart: kind === 'end' || kind === 'curve' ? [] : connectedWallEndpoints(currentFloor.walls, wall.start, wall.id),
+            connectedEnd: kind === 'start' || kind === 'curve' ? [] : connectedWallEndpoints(currentFloor.walls, wall.end, wall.id),
+          };
+          controls.enabled = false;
+          renderer.domElement.style.cursor = 'grabbing';
+          return;
+        }
+      }
+
+      // In edit mode, dragging an already-selected wall body moves it directly on the XZ plane
+      if (editMode && selectedWallId3D && currentFloor) {
+        const intersects = raycaster.intersectObjects(wallGroup.children, false);
+        const hit = pickWallHit(intersects);
+        if (hit && hit.wallId === selectedWallId3D && (!hit.floorId || hit.floorId === currentFloor.id)) {
+          const wall = currentFloor.walls.find(w => w.id === selectedWallId3D);
+          const bodyHit = intersects.find(entry => entry.object.userData.wallId === selectedWallId3D);
+          if (wall && bodyHit) {
+            dragWallState = {
+              kind: 'move',
+              wallId: wall.id,
+              floorId: currentFloor.id,
+              downClientX: e.clientX,
+              downClientY: e.clientY,
+              undoStarted: false,
+              dragPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -bodyHit.point.y),
+              startHitX: bodyHit.point.x,
+              startHitZ: bodyHit.point.z,
+              origStart: { ...wall.start },
+              origEnd: { ...wall.end },
+              origCurve: wall.curvePoint ? { ...wall.curvePoint } : undefined,
+              connectedStart: connectedWallEndpoints(currentFloor.walls, wall.start, wall.id),
+              connectedEnd: connectedWallEndpoints(currentFloor.walls, wall.end, wall.id),
+            };
+            controls.enabled = false;
+            renderer.domElement.style.cursor = 'grabbing';
+          }
+        }
+      }
+    });
+
+    renderer.domElement.addEventListener('pointerup', (e) => {
+      if (flyDragLookStart) flyDragLookStart = null;
+      if (dragWallState) {
+        finishWallDrag();
+        if (suppressNextWallClick) {
+          suppressNextWallClick = false;
+          return;
+        }
+      }
+
+      const dx = e.clientX - pointerDownPos.x;
+      const dy = e.clientY - pointerDownPos.y;
+      if (Math.hypot(dx, dy) > 5) return;
+      if (walkthroughMode || flyMode) return;
+
+      updateRayMouse(e);
 
       // Camera placement mode: first click = position, second click = look-at target
       if (cameraPlacementMode) {
@@ -918,8 +1190,20 @@
         return;
       }
 
-      // A solid stacked floor in front of a wall hides it, so the click stops there.
-      selectedElementId.set(pickedWallId(raycaster.intersectObjects(wallGroup.children, false), otherFloorsStyle));
+      // Select clicked wall across any visible floor (switching active floor when needed)
+      const hitWall = pickWallHit(raycaster.intersectObjects(wallGroup.children, false));
+      if (hitWall) {
+        if (hitWall.floorId && hitWall.floorId !== currentFloor?.id) {
+          setActiveFloor(hitWall.floorId);
+        }
+        selectedElementId.set(hitWall.wallId);
+      } else {
+        selectedElementId.set(null);
+      }
+    });
+    renderer.domElement.addEventListener('pointercancel', () => {
+      flyDragLookStart = null;
+      if (dragWallState) finishWallDrag();
     });
 
     // Double-click: orbit around the clicked point. Camera and target move by the same offset,
@@ -927,10 +1211,10 @@
     // A placement click turns its mode off before the dblclick arrives, so note the mode when the press starts.
     let orbitPickBlocked = false;
     renderer.domElement.addEventListener('pointerdown', () => {
-      orbitPickBlocked = walkthroughMode || cameraPlacementMode || furniturePlacementMode;
+      orbitPickBlocked = walkthroughMode || flyMode || cameraPlacementMode || furniturePlacementMode || dragWallState !== null;
     });
     renderer.domElement.addEventListener('dblclick', (e) => {
-      if (orbitPickBlocked || walkthroughMode || cameraPlacementMode || furniturePlacementMode) return;
+      if (orbitPickBlocked || walkthroughMode || flyMode || cameraPlacementMode || furniturePlacementMode) return;
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -954,15 +1238,81 @@
     });
     controls.addEventListener('start', () => { orbitGlide = null; });
 
-    // Hover highlight in edit mode
+    // Hover highlight and interactive 3D wall dragging
     let hoveredMesh: THREE.Mesh | null = null;
     renderer.domElement.addEventListener('mousemove', (e) => {
+      if (flyMode) {
+        if (flyDragLookStart && document.pointerLockElement !== renderer.domElement) {
+          freeFlyMotion.lookDelta(e.clientX - flyDragLookStart.x, e.clientY - flyDragLookStart.y, camera);
+          flyDragLookStart = { x: e.clientX, y: e.clientY };
+          markSceneDirty();
+        }
+        return;
+      }
+
+      if (dragWallState) {
+        updateRayMouse(e);
+        const planeHit = new THREE.Vector3();
+        if (!raycaster.ray.intersectPlane(dragWallState.dragPlane, planeHit)) return;
+        const movedPx = Math.hypot(e.clientX - dragWallState.downClientX, e.clientY - dragWallState.downClientY);
+        if (!dragWallState.undoStarted && movedPx > 3) {
+          beginUndoGroup();
+          dragWallState.undoStarted = true;
+        }
+        if (!dragWallState.undoStarted) return;
+
+        const dx = planeHit.x - dragWallState.startHitX;
+        const dz = planeHit.z - dragWallState.startHitZ;
+        if (dragWallState.kind === 'start' || dragWallState.kind === 'end') {
+          const orig = dragWallState.kind === 'start' ? dragWallState.origStart : dragWallState.origEnd;
+          const fixed = dragWallState.kind === 'start' ? dragWallState.origEnd : dragWallState.origStart;
+          const nextPt = { x: snapCoord(orig.x + dx), y: snapCoord(orig.y + dz) };
+          if (Math.hypot(nextPt.x - fixed.x, nextPt.y - fixed.y) >= Math.max(MIN_WALL_LENGTH, 5)) {
+            moveWallEndpoint(dragWallState.wallId, dragWallState.kind, nextPt);
+            const conns = dragWallState.kind === 'start' ? dragWallState.connectedStart : dragWallState.connectedEnd;
+            for (const c of conns) {
+              moveWallEndpoint(c.wallId, c.endpoint, nextPt);
+            }
+          }
+        } else if (dragWallState.kind === 'curve') {
+          const base = dragWallState.origCurve ?? {
+            x: (dragWallState.origStart.x + dragWallState.origEnd.x) / 2,
+            y: (dragWallState.origStart.y + dragWallState.origEnd.y) / 2,
+          };
+          const nextCurve = { x: snapCoord(base.x + dx), y: snapCoord(base.y + dz) };
+          moveWallGeometryDuringDrag(dragWallState.wallId, {
+            start: dragWallState.origStart,
+            end: dragWallState.origEnd,
+            curvePoint: nextCurve,
+          });
+        } else if (dragWallState.kind === 'move') {
+          const snappedStartX = snapCoord(dragWallState.origStart.x + dx);
+          const snappedStartY = snapCoord(dragWallState.origStart.y + dz);
+          const actualDx = snappedStartX - dragWallState.origStart.x;
+          const actualDy = snappedStartY - dragWallState.origStart.y;
+          const nextStart = { x: dragWallState.origStart.x + actualDx, y: dragWallState.origStart.y + actualDy };
+          const nextEnd = { x: dragWallState.origEnd.x + actualDx, y: dragWallState.origEnd.y + actualDy };
+          const nextCurve = dragWallState.origCurve
+            ? { x: dragWallState.origCurve.x + actualDx, y: dragWallState.origCurve.y + actualDy }
+            : undefined;
+          moveWallGeometryDuringDrag(dragWallState.wallId, {
+            start: nextStart,
+            end: nextEnd,
+            curvePoint: nextCurve,
+          });
+          for (const c of dragWallState.connectedStart) {
+            moveWallEndpoint(c.wallId, c.endpoint, nextStart);
+          }
+          for (const c of dragWallState.connectedEnd) {
+            moveWallEndpoint(c.wallId, c.endpoint, nextEnd);
+          }
+        }
+        return;
+      }
+
       // Furniture placement ghost preview
       if (editMode && furniturePlacementMode && selectedCatalogId) {
-        const rect = renderer.domElement.getBoundingClientRect();
-        mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(mouse, camera);
+        updateRayMouse(e);
         const hit = new THREE.Vector3();
         if (activeFloorHit(hit)) {
           if (!ghostGroup) {
@@ -984,41 +1334,51 @@
         markSceneDirty();
       }
 
-      if (!editMode) {
+      if (walkthroughMode) {
         if (hoveredMesh) { hoveredMesh = null; renderer.domElement.style.cursor = ''; }
         return;
       }
-      renderer.domElement.style.cursor = 'pointer';
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
+
+      updateRayMouse(e);
+      const handleHits = wallHandleGroup ? raycaster.intersectObjects(wallHandleGroup.children, false) : [];
+      if (handleHits.some(h => typeof h.object.userData.handleKind === 'string')) {
+        hoveredMesh = null;
+        renderer.domElement.style.cursor = 'grab';
+        return;
+      }
+
       const intersects = raycaster.intersectObjects(wallGroup.children, false);
-      const hit = pickedWallId(intersects, otherFloorsStyle) ? intersects.find(i => i.object.userData.wallId) : undefined;
-      if (hit && hit.object !== hoveredMesh) {
+      const hitWall = pickWallHit(intersects);
+      const hit = hitWall ? intersects.find(i => i.object.userData.wallId === hitWall.wallId) : undefined;
+      if (hit) {
         hoveredMesh = hit.object as THREE.Mesh;
-        renderer.domElement.style.cursor = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="%23fff" stroke="%23000" stroke-width="1.5" d="M16.56 8.94L7.62 0 6.21 1.41l2.38 2.38-5.15 5.15a1.49 1.49 0 0 0 0 2.12l5.5 5.5a1.49 1.49 0 0 0 2.12 0l5.5-5.5a1.49 1.49 0 0 0 0-2.12zM5.21 10L10 5.21 14.79 10H5.21zM19 11.5s-2 2.17-2 3.5a2 2 0 1 0 4 0c0-1.33-2-3.5-2-3.5z"/></svg>') + '") 2 22, pointer';
-      } else if (!hit) {
+        renderer.domElement.style.cursor = editMode
+          ? 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="%23fff" stroke="%23000" stroke-width="1.5" d="M16.56 8.94L7.62 0 6.21 1.41l2.38 2.38-5.15 5.15a1.49 1.49 0 0 0 0 2.12l5.5 5.5a1.49 1.49 0 0 0 2.12 0l5.5-5.5a1.49 1.49 0 0 0 0-2.12zM5.21 10L10 5.21 14.79 10H5.21zM19 11.5s-2 2.17-2 3.5a2 2 0 1 0 4 0c0-1.33-2-3.5-2-3.5z"/></svg>') + '") 2 22, pointer'
+          : 'pointer';
+      } else {
         hoveredMesh = null;
         renderer.domElement.style.cursor = editMode ? 'crosshair' : '';
       }
     });
 
-    // Initialize PointerLock controls for walkthrough mode
+    // Initialize PointerLock controls for walkthrough & free-fly modes
     pointerControls = new PointerLockControls(camera, renderer.domElement);
     pointerControls.addEventListener('change', markSceneDirty);
 
-    // Keyboard event listeners for walkthrough
+    // Keyboard event listeners for walkthrough, free-fly, and 3D editing
     document.addEventListener('keydown', onKeyDown, false);
     document.addEventListener('keyup', onKeyUp, false);
     window.addEventListener('blur', resetWalkthroughInput);
     document.addEventListener('visibilitychange', resetWalkthroughInput);
     document.addEventListener('focusin', onWalkthroughFocus);
 
-    // ESC key to exit walkthrough mode
+    // ESC / unlock exits walkthrough or free-fly mode
     pointerControls.addEventListener('unlock', () => {
       if (walkthroughMode) {
         exitWalkthroughMode();
+      }
+      if (flyMode) {
+        exitFlyMode();
       }
     });
 
@@ -1065,7 +1425,84 @@
 
     wallGroup = new THREE.Group();
     scene.add(wallGroup);
+    wallHandleGroup = new THREE.Group();
+    scene.add(wallHandleGroup);
     return true;
+  }
+
+  function cancelWallDrag() {
+    if (!dragWallState) return;
+    const didUndo = dragWallState.undoStarted;
+    dragWallState = null;
+    controls.enabled = !walkthroughMode && !flyMode;
+    if (didUndo) endUndoGroup('Wall edit');
+    if (renderer?.domElement) renderer.domElement.style.cursor = '';
+  }
+
+  function updateWallHandles() {
+    if (!wallHandleGroup) return;
+    clearGroup(wallHandleGroup);
+    if (!selectedWallId3D || !currentFloor || walkthroughMode || flyMode || cameraPlacementMode || furniturePlacementMode) {
+      markSceneDirty();
+      return;
+    }
+    const wall = currentFloor.walls.find(w => w.id === selectedWallId3D);
+    if (!wall) {
+      markSceneDirty();
+      return;
+    }
+
+    const startH = getWallStartHeight(wall);
+    const endH = getWallEndHeight(wall);
+    const baseY = activeFloorElevation;
+
+    const addEndpointHandle = (pt: Point, h: number, kind: 'start' | 'end') => {
+      const topY = baseY + h + 16;
+      const stemH = Math.max(h + 16, 16);
+      const stemGeo = new THREE.CylinderGeometry(2.5, 2.5, stemH, 8);
+      const stemMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.7 });
+      const stem = new THREE.Mesh(stemGeo, stemMat);
+      stem.position.set(pt.x, baseY + stemH / 2, pt.y);
+      wallHandleGroup.add(stem);
+
+      const sphereGeo = new THREE.SphereGeometry(13, 16, 16);
+      const sphereMat = new THREE.MeshBasicMaterial({ color: 0x0ea5e9 });
+      const handle = new THREE.Mesh(sphereGeo, sphereMat);
+      handle.position.set(pt.x, topY, pt.y);
+      handle.userData.handleKind = kind;
+      handle.userData.wallId = wall.id;
+      handle.userData.renderExclude = true;
+      wallHandleGroup.add(handle);
+    };
+
+    addEndpointHandle(wall.start, startH, 'start');
+    addEndpointHandle(wall.end, endH, 'end');
+
+    const midX = wall.curvePoint ? wall.curvePoint.x : (wall.start.x + wall.end.x) / 2;
+    const midY = wall.curvePoint ? wall.curvePoint.y : (wall.start.y + wall.end.y) / 2;
+    const midH = Math.max(startH, endH) + 22;
+    const moveGeo = new THREE.OctahedronGeometry(14, 0);
+    const moveMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
+    const moveHandle = new THREE.Mesh(moveGeo, moveMat);
+    moveHandle.position.set(midX, baseY + midH, midY);
+    moveHandle.userData.handleKind = 'move';
+    moveHandle.userData.wallId = wall.id;
+    moveHandle.userData.renderExclude = true;
+    wallHandleGroup.add(moveHandle);
+
+    if (wall.curvePoint) {
+      const curveHandle = new THREE.Mesh(
+        new THREE.SphereGeometry(11, 14, 14),
+        new THREE.MeshBasicMaterial({ color: 0xf59e0b })
+      );
+      curveHandle.position.set(wall.curvePoint.x, baseY + Math.max(startH, endH) + 46, wall.curvePoint.y);
+      curveHandle.userData.handleKind = 'curve';
+      curveHandle.userData.wallId = wall.id;
+      curveHandle.userData.renderExclude = true;
+      wallHandleGroup.add(curveHandle);
+    }
+
+    markSceneDirty();
   }
 
   /** Where the pointer ray meets the active floor's plane, unless a solid stacked floor hides that spot. */
@@ -1216,7 +1653,7 @@
     }
   }
 
-  function buildColumns(floor: Floor) {
+  function buildColumns(floor: Floor, group: THREE.Group = wallGroup) {
     if (!floor.columns) return;
     for (const col of floor.columns) {
       const h = col.height || 280;
@@ -1225,7 +1662,58 @@
       mesh.position.set(col.position.x, h / 2, col.position.y);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      wallGroup.add(mesh);
+      group.add(mesh);
+    }
+  }
+
+  function buildFloorPlanes(floor: Floor, group: THREE.Group = wallGroup, yOffset = 0, look?: Partial<THREE.MeshStandardMaterialParameters>) {
+    if (!floor.floorPlanes?.length) return;
+    for (const plane of floor.floorPlanes) {
+      const w = plane.width, h = plane.height, t = plane.thickness;
+      if (!(w > 0 && h > 0 && t > 0)) continue;
+      let mat: THREE.MeshStandardMaterial;
+      if (look) {
+        mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(plane.color || '#cccccc'),
+          roughness: 0.9,
+          ...look,
+          ...depthOffset(DEPTH_ORDER.slab),
+        });
+      } else if (plane.floorTexture && plane.floorTexture !== 'none') {
+        const floorMat = getMaterial(plane.floorTexture);
+        const floorCanvas = getFloorTextureCanvas(plane.floorTexture);
+        if (floorCanvas) {
+          const tex = ownColorCanvasTexture(floorCanvas);
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          tex.repeat.set(w / 200, h / 200);
+          mat = new THREE.MeshStandardMaterial({
+            map: tex,
+            roughness: floorMat.roughness ?? 0.8,
+            ...depthOffset(DEPTH_ORDER.slab),
+          });
+        } else {
+          mat = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(floorMat.color),
+            roughness: floorMat.roughness ?? 0.8,
+            ...depthOffset(DEPTH_ORDER.slab),
+          });
+        }
+      } else {
+        mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(plane.color || '#d6d3d1'),
+          roughness: 0.85,
+          ...depthOffset(DEPTH_ORDER.slab),
+        });
+      }
+      const geo = new THREE.BoxGeometry(w, t, h);
+      const mesh = new THREE.Mesh(geo, mat);
+      const topOffset = typeof plane.elevation === 'number' && Number.isFinite(plane.elevation) && plane.elevation !== 0 ? plane.elevation : 0.8;
+      mesh.position.set(plane.position.x, yOffset + topOffset - t / 2, plane.position.y);
+      mesh.rotation.y = -((plane.rotation || 0) * Math.PI) / 180;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.renderMaterial = 'floor';
+      group.add(mesh);
     }
   }
 
@@ -1295,7 +1783,7 @@
     return leaf;
   }
 
-  function addOpeningFrame(wall: Wall, position: number, width: number, bottom: number, height: number, depth: number, material: THREE.Material, excludeFromRender = false) {
+  function addOpeningFrame(wall: Wall, position: number, width: number, bottom: number, height: number, depth: number, material: THREE.Material, excludeFromRender = false, targetGroup: THREE.Group = wallGroup) {
     const path = wallPathProfile(wall);
     const rect = pathOpening(path, position * path.length, width, bottom, height);
     if (!rect) return;
@@ -1309,16 +1797,31 @@
       mesh.rotation.y = -Math.atan2(span.end.y - span.start.y, span.end.x - span.start.x);
       mesh.userData.renderExclude = excludeFromRender;
       mesh.userData.xray = true;
+      mesh.userData.cutawayWallId = wall.id;
       mesh.castShadow = !excludeFromRender;
-      wallGroup.add(mesh);
+      targetGroup.add(mesh);
     }
   }
 
   function buildWalls(floor: Floor) {
     wallHighlight.clear();
+    wallFade.clear();
+    activeCutawayMeshes = [];
+    activeCutawayWallIds = [];
     clearGroup(wallGroup);
     cameraHelper = null;
     wallMeshMap.clear();
+    buildFloorContent(floor, wallGroup, 0);
+    wallGroup.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && typeof (obj.userData.cutawayWallId ?? obj.userData.wallId) === 'string') {
+        activeCutawayMeshes.push(obj);
+      }
+    });
+    applyWallTransparency();
+  }
+
+  function buildFloorContent(floor: Floor, targetGroup: THREE.Group, yOffset = 0) {
+    const floorRoot = new THREE.Group();
 
     const defaultInteriorMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, ...depthOffset(DEPTH_ORDER.interiorWall) });
     const defaultExteriorMat = new THREE.MeshStandardMaterial({ color: 0xd4cfc9, roughness: 0.85 });
@@ -1383,8 +1886,8 @@
             const mesh = new THREE.Mesh(geo, materials);
             mesh.castShadow = true; mesh.receiveShadow = true;
             mesh.position.set(span.start.x + segment.offsetX * Math.cos(angle), 0, span.start.y + segment.offsetX * Math.sin(angle));
-            mesh.rotation.y = -angle; mesh.userData.wallId = wall.id; mesh.userData.xray = true;
-            wallMeshMap.set(mesh, wall.id); wallGroup.add(mesh);
+            mesh.rotation.y = -angle; mesh.userData.wallId = wall.id; mesh.userData.floorId = floor.id; mesh.userData.xray = true;
+            wallMeshMap.set(mesh, wall.id); floorRoot.add(mesh);
           }
         }
         // The same cuts keep baseboards out of curved doorways.
@@ -1398,7 +1901,7 @@
               if (width <= 0) continue;
               const mesh = new THREE.Mesh(createSlopedBoxGeometry(width, t + 2, segment.bottomY, segment.topYLeft, segment.topYRight), baseboardMat);
               mesh.position.set(span.start.x + offsetX * Math.cos(angle), 0, span.start.y + offsetX * Math.sin(angle));
-              mesh.rotation.y = -angle; mesh.castShadow = true; mesh.userData.xray = true; wallGroup.add(mesh);
+              mesh.rotation.y = -angle; mesh.castShadow = true; mesh.userData.wallId = wall.id; mesh.userData.floorId = floor.id; mesh.userData.xray = true; floorRoot.add(mesh);
             }
           }
         }
@@ -1440,9 +1943,10 @@
           );
           mesh.rotation.y = -angle;
           mesh.userData.wallId = wall.id;
+          mesh.userData.floorId = floor.id;
           mesh.userData.xray = true;
           wallMeshMap.set(mesh, wall.id);
-          wallGroup.add(mesh);
+          floorRoot.add(mesh);
         }
 
         // Baseboard — the wall's own opening cuts at baseboard height, as on curved
@@ -1456,8 +1960,10 @@
             bbMesh.position.set(cx + localX * Math.cos(angle), 0, cy + localX * Math.sin(angle));
             bbMesh.rotation.y = -angle;
             bbMesh.castShadow = true;
+            bbMesh.userData.wallId = wall.id;
+            bbMesh.userData.floorId = floor.id;
             bbMesh.userData.xray = true;
-            wallGroup.add(bbMesh);
+            floorRoot.add(bbMesh);
           }
         }
     }
@@ -1487,7 +1993,7 @@
 
       // Clip jambs and header too when an opening reaches the wall profile.
       for (const box of doorFrameBoxes(path, opening, wt)) {
-        addOpeningFrame(wall, box.center / length, box.width, box.bottom, box.height, box.depth, frameMat);
+        addOpeningFrame(wall, box.center / length, box.width, box.bottom, box.height, box.depth, frameMat, false, floorRoot);
       }
 
       if (door.type === 'opening') {
@@ -1505,7 +2011,8 @@
           secMesh.rotation.y = -angle;
           secMesh.castShadow = true;
           secMesh.userData.xray = true;
-          wallGroup.add(secMesh);
+          secMesh.userData.cutawayWallId = wall.id;
+          floorRoot.add(secMesh);
         }
       } else if (door.type === 'pocket') {
         // Pocket door: a plain wooden slab shown half slid into a cavity in the wall on
@@ -1528,6 +2035,7 @@
         slab.position.set(center, (H - 2) / 2 + 1, 0);
         slab.castShadow = true;
         slab.userData.xray = true;
+        slab.userData.cutawayWallId = wall.id;
         group.add(slab);
         // Flush pulls on both faces near the leading edge
         const pullX = center - pocketSide * (W / 2 - 6);
@@ -1535,9 +2043,10 @@
           const pull = new THREE.Mesh(new THREE.BoxGeometry(3, 15, 0.6), pullMat);
           pull.position.set(pullX, Math.min(100, H * 0.5), face * (depth / 2 + 0.2));
           pull.userData.xray = true;
+          pull.userData.cutawayWallId = wall.id;
           group.add(pull);
         }
-        wallGroup.add(group);
+        floorRoot.add(group);
       } else if (glazed) {
         // Glazed doors: metal-framed glass leaves. Bifolds are below; otherwise closed, two leaves. Sliding leaves run on
         // offset tracks and overlap at the meeting stile; French leaves are hinged at
@@ -1555,6 +2064,7 @@
           const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
           mesh.position.set(x, y, z);
           mesh.userData.xray = true;
+          mesh.userData.cutawayWallId = wall.id;
           mesh.userData.renderExclude = glass;
           mesh.castShadow = !glass;
           parent.add(mesh);
@@ -1595,7 +2105,7 @@
           for (let i = 0; i < panels; i++) {
             for (const y of [20, panelH / 2, panelH - 20]) addBox(1.5, 10, 1.5, points[i].x, bottom + y, points[i].z, hardwareMat);
           }
-          wallGroup.add(group);
+          floorRoot.add(group);
         } else {
           const sliding = door.type === 'sliding';
           const bottom = sliding ? 2 : 1; // sliding leaves sit on the floor track
@@ -1644,7 +2154,7 @@
               for (const y of [20, leafH / 2, leafH - 20]) addBox(1.5, 10, 1.5, hingeX, bottom + y, hingeZ, hardwareMat);
             }
           }
-          wallGroup.add(group);
+          floorRoot.add(group);
         }
       } else {
         // Wooden door leaves, slightly ajar (15°), opening toward the face the plan symbol
@@ -1665,7 +2175,10 @@
           const panelMesh = buildDoorLeaf(leafW - gap, doorHeight - 4, leafStyle, panelMat, recessMat, leafGlassMat, handleY - (doorHeight / 2 - 2));
           panelMesh.position.set(pose.x, doorHeight / 2 - 2, pose.z);
           panelMesh.rotation.y = -pose.yaw;
-          wallGroup.add(panelMesh);
+          panelMesh.traverse((child) => {
+            if (child instanceof THREE.Mesh) child.userData.cutawayWallId = wall.id;
+          });
+          floorRoot.add(panelMesh);
 
           // Door handle (small sphere) near the leaf's free edge
           const handleMesh = new THREE.Mesh(new THREE.SphereGeometry(3, 8, 8), handleMat);
@@ -1676,7 +2189,8 @@
             panelMesh.position.z + handleLocalX * Math.sin(pose.yaw)
           );
           handleMesh.userData.xray = true;
-          wallGroup.add(handleMesh);
+          handleMesh.userData.cutawayWallId = wall.id;
+          floorRoot.add(handleMesh);
         }
       }
     }
@@ -1699,11 +2213,11 @@
 
       // Outer frame — up to 4 bars forming a rectangle, less any the wall profile clips away
       for (const box of windowOuterBars(path, opening, mullionW)) {
-        addOpeningFrame(wall, box.center / length, box.width, box.bottom, box.height, mullionW, frameMat);
+        addOpeningFrame(wall, box.center / length, box.width, box.bottom, box.height, mullionW, frameMat, false, floorRoot);
       }
       // Center vertical and horizontal mullions
-      addOpeningFrame(wall, t, mullionW, win.sillHeight, effectiveWinH, mullionW, frameMat);
-      addOpeningFrame(wall, t, win.width, winCY - mullionW / 2, mullionW, mullionW, frameMat);
+      addOpeningFrame(wall, t, mullionW, win.sillHeight, effectiveWinH, mullionW, frameMat, false, floorRoot);
+      addOpeningFrame(wall, t, win.width, winCY - mullionW / 2, mullionW, mullionW, frameMat, false, floorRoot);
 
       // Glass panes (4 quadrants)
       const glassMat = new THREE.MeshStandardMaterial({
@@ -1716,19 +2230,19 @@
         for (const qy of [-1, 1]) {
           const ox = qx * (halfW / 2 + mullionW / 2);
           const centerY = winCY + qy * (halfH / 2 + mullionW / 2);
-          addOpeningFrame(wall, t + ox / length, halfW, centerY - halfH / 2, halfH, 1, glassMat, true);
+          addOpeningFrame(wall, t + ox / length, halfW, centerY - halfH / 2, halfH, 1, glassMat, true, floorRoot);
         }
       }
 
       // Sill — protruding ledge
-      addOpeningFrame(wall, t, win.width + 16, win.sillHeight - 4, 4, wt + 10, frameMat);
+      addOpeningFrame(wall, t, win.width + 16, win.sillHeight - 4, 4, wt + 10, frameMat, false, floorRoot);
     }
 
     // Furniture
     const furnitureOffsets = furnitureDepthOffsets(floor.furniture);
     for (const [i, fi] of floor.furniture.entries()) {
       const model = createPlacedFurnitureModel(fi, markSceneDirty, get(currentProject) ?? undefined, furnitureOffsets[i]);
-      if (model) wallGroup.add(model);
+      if (model) floorRoot.add(model);
     }
 
     // Room floors with materials + floating labels
@@ -1745,7 +2259,7 @@
         const slab = new THREE.Mesh(slabGeometry, new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.9, ...depthOffset(DEPTH_ORDER.slab) }));
         slab.userData.renderMaterial = 'floor';
         slab.receiveShadow = true;
-        wallGroup.add(slab);
+        floorRoot.add(slab);
       }
 
       // Triangulate the polygon using ear-clipping via THREE.ShapeGeometry
@@ -1834,7 +2348,7 @@
       mesh.position.y = 1;
       mesh.receiveShadow = true;
       if (room.floorOpening) { geo.dispose(); material.dispose(); }
-      else wallGroup.add(mesh);
+      else floorRoot.add(mesh);
 
       // Floating room label using sprite
       const centroid = roomLabelPosition(room, poly, holes[ri]);
@@ -1857,7 +2371,7 @@
       const sprite = new THREE.Sprite(spriteMat);
       sprite.position.set(centroid.x, 30, centroid.y);
       sprite.scale.set(150, 40, 1);
-      wallGroup.add(sprite);
+      floorRoot.add(sprite);
 
       // A flat ceiling is valid only when this room's boundary has one height.
       const ceilingHeight = roomCeilingHeight(room.walls, floor.walls);
@@ -1874,17 +2388,23 @@
         ceilMesh.rotation.x = -Math.PI / 2;
         ceilMesh.position.y = ceilingHeight;
         ceilMesh.receiveShadow = true;
-        wallGroup.add(ceilMesh);
+        floorRoot.add(ceilMesh);
       }
     }
 
     // Stairs
-    buildStairs(floor);
+    buildStairs(floor, floorRoot, 0);
 
     // Columns
-    buildColumns(floor);
+    buildColumns(floor, floorRoot);
 
-    applyWallTransparency();
+    // Horizontal floor planes
+    buildFloorPlanes(floor, floorRoot, 0);
+
+    for (const child of [...floorRoot.children]) {
+      if (yOffset !== 0) child.position.y += yOffset;
+      targetGroup.add(child);
+    }
   }
 
   /** Cuts the openings out of the ground and the site floor, or restores them whole. */
@@ -1938,7 +2458,9 @@
     const entries = assembleFloorStack(wallGroup, project.floors, activeF.id, (floor, group, offset) => {
       buildFloorIntoGroup(floor, group, offset, otherFloorsStyle);
       // Picking and placement treat solid floors as covering what lies behind them.
-      group.traverse(object => { object.userData.stackedFloor = true; });
+      group.traverse(object => {
+        if (!object.userData.renderExclude) object.userData.stackedFloor = true;
+      });
     });
     const box = new THREE.Box3().setFromObject(wallGroup);
     const center = box.getCenter(new THREE.Vector3());
@@ -1950,6 +2472,7 @@
     floorPlane.constant = -activeFloorElevation;
     // Keep the presentation ground below basements as well as above-ground floors.
     sceneGround.position.y = Math.min(0, ...entries.map(entry => entry.yOffset)) - 1;
+    applyWallTransparency();
   }
 
   function addFloorLabel(name: string, yOffset: number, labelX: number, labelZ: number) {
@@ -1973,8 +2496,12 @@
     wallGroup.add(sprite);
   }
 
-  /** Build another floor's walls, slabs and columns into a group at a Y offset, translucent or solid. */
+  /** Build another floor's full solid geometry or translucent reference into a group at a Y offset. */
   function buildFloorIntoGroup(floor: Floor, group: THREE.Group, yOffset: number, style: StackedFloorsStyle) {
+    if (style === 'solid') {
+      buildFloorContent(floor, group, yOffset);
+      return;
+    }
     const look = stackedFloorMaterial(style);
     const stackedMat = (color: number, roughness = 0.9) => new THREE.MeshStandardMaterial({
       color, roughness, ...look, ...depthOffset(DEPTH_ORDER.interiorWall)
@@ -2053,6 +2580,9 @@
         group.add(mesh);
       }
     }
+
+    // Horizontal floor planes
+    buildFloorPlanes(floor, group, yOffset, look);
   }
 
   function rebuildScene(force = false) {
@@ -2060,6 +2590,7 @@
     if (!project || !currentFloor) return;
     const signature = sceneSignature(project, currentFloor, showAllFloors, get(projectSettings).units, otherFloorsStyle);
     if (!force && signature === renderedSignature) return;
+    const previousFloorElevation = activeFloorElevation;
     const walkingPosition = walkthroughMode ? camera.position.clone() : null;
     const walkingRotation = walkthroughMode ? camera.quaternion.clone() : null;
     if (showAllFloors) {
@@ -2072,17 +2603,24 @@
       buildWalls(currentFloor);
       buildStairwell(stairwellView(project.floors, currentFloor.id));
     }
-    // Fit the orbit camera only for a new project, floor or stacking choice, so edits, Undo/Redo,
-    // unit changes and arriving textures keep the user's view. Walkthrough restores its pose below.
+    // Fit the orbit camera only for a new project or stacking choice; switching floors preserves
+    // zoom and viewpoint across floors (shifting vertically by floor elevation when stacked).
     const context = framingContext(project, currentFloor, showAllFloors);
     if (shouldFrameScene(framedContext, context)) autoCenterCamera();
+    else if (activeFloorElevation !== previousFloorElevation && !(showAllFloors && otherFloorsStyle === 'solid')) {
+      const deltaY = activeFloorElevation - previousFloorElevation;
+      camera.position.y += deltaY;
+      controls.target.y += deltaY;
+      controls.update();
+    }
     framedContext = context;
-    wallHighlight.apply(wallMeshMap, selectedWallId3D);
+    updateWallHandles();
     if (walkingPosition && walkingRotation) {
       camera.position.copy(walkingPosition);
       camera.position.y = activeFloorElevation + eyeHeight;
       camera.quaternion.copy(walkingRotation);
     }
+    syncClosestWallFade(true);
     if (cameraPlaced) {
       updateInteriorCamera();
       updateCameraMarkerFromState();
@@ -2108,13 +2646,16 @@
   function toggleWallTransparency() {
     wallsTransparent = !wallsTransparent;
     wallHighlight.clear();
+    wallFade.clear();
+    activeCutawayWallIds = [];
     applyWallTransparency();
-    wallHighlight.apply(wallMeshMap, selectedWallId3D);
+    syncClosestWallFade(true);
     markSceneDirty();
   }
 
   function viewTopDown() {
     if (walkthroughMode) exitWalkthroughMode();
+    if (flyMode) exitFlyMode();
     orbitGlide = null;
     // Consume pending orbit/pan deltas before setting the requested view. This
     // public update path clears damping without reaching into control internals.
@@ -2137,6 +2678,8 @@
   }
 
   function enterWalkthroughMode() {
+    if (flyMode) exitFlyMode();
+    cancelWallDrag();
     orbitGlide = null;
     cancelAIRender();
     cameraPlacementMode = false;
@@ -2147,6 +2690,7 @@
     walkthroughMotion.reset();
     walkthroughMouseUnavailable = false;
     controls.enabled = false;
+    updateWallHandles();
 
     // Position camera at eye height in center of floor plan or largest room
     if (currentFloor) {
@@ -2213,11 +2757,24 @@
       walkthroughMotion.advance(timestamp, camera, { moveSpeed, sprintSpeed, eyeHeight, floorElevation: activeFloorElevation });
       if (sceneDirty || moving) {
         sceneDirty = false;
+        syncClosestWallFade();
         renderer.render(scene, camera);
         renderer.domElement.dataset.rendered = 'true';
       }
       if (walkthroughMotion.active) requestRender();
       else walkthroughMotion.stopClock();
+    } else if (flyMode) {
+      lastOrbitFrame = undefined;
+      const moving = freeFlyMotion.active;
+      freeFlyMotion.advance(timestamp, camera, { flySpeed });
+      if (sceneDirty || moving) {
+        sceneDirty = false;
+        syncClosestWallFade();
+        renderer.render(scene, camera);
+        renderer.domElement.dataset.rendered = 'true';
+      }
+      if (freeFlyMotion.active) requestRender();
+      else freeFlyMotion.stopClock();
     } else {
       if (orbitGlide) {
         const t = THREE.MathUtils.smoothstep(timestamp - orbitGlide.start, 0, ORBIT_GLIDE_MS);
@@ -2232,6 +2789,7 @@
       lastOrbitFrame = animId === undefined ? undefined : timestamp;
       if (sceneDirty) {
         sceneDirty = false;
+        syncClosestWallFade();
         renderer.render(scene, camera);
         renderer.domElement.dataset.rendered = 'true';
       }
@@ -2250,6 +2808,7 @@
 
   function takeScreenshot() {
     if (!renderer || !scene || !camera) return;
+    syncClosestWallFade();
     renderer.render(scene, camera);
     renderer.domElement.dataset.rendered = 'true';
     const dataUrl = renderer.domElement.toDataURL('image/png');
@@ -2298,6 +2857,7 @@
     const unsub = activeFloor.subscribe((f) => {
       if (currentFloor?.id !== f?.id) {
         closeCamera();
+        cancelWallDrag();
         if (walkthroughMode) exitWalkthroughMode();
       }
       currentFloor = f;
@@ -2311,11 +2871,14 @@
     const unsubSel = selectedElementId.subscribe((id) => {
       selectedWallId3D = id;
       wallHighlight.apply(wallMeshMap, id);
+      updateWallHandles();
       markSceneDirty();
     });
 
     return () => {
       viewerMounted = false;
+      cancelWallDrag();
+      freeFlyMotion.reset();
       cancelAIRender();
       stopAISettings();
       stopTextures();
@@ -2333,6 +2896,10 @@
       walkthroughMotion.reset();
       releaseCameraPreview();
       wallHighlight.clear();
+      wallFade.clear();
+      activeCutawayMeshes = [];
+      activeCutawayWallIds = [];
+      if (wallHandleGroup) clearGroup(wallHandleGroup);
       removeGhostPreview();
       skyTexture.dispose();
       sunLight.shadow.dispose();
@@ -2423,7 +2990,7 @@
 
     <!-- Edit Mode Toggle -->
     <button
-      onclick={() => { editMode = !editMode; if (editMode && walkthroughMode) { exitWalkthroughMode(); } if (!editMode) { selectedElementId.set(null); } }}
+      onclick={() => { editMode = !editMode; if (editMode) { if (walkthroughMode) exitWalkthroughMode(); if (flyMode) exitFlyMode(); } }}
       class="p-2 rounded-lg transition-colors {editMode ? 'bg-blue-600 text-white ring-2 ring-blue-300' : 'bg-black/70 text-white hover:bg-black/80'}"
       title={editMode ? $t('viewerNav.exitEdit') : $t('viewerNav.editHelp')}
       aria-label={editMode ? $t('viewerNav.exitEdit') : $t('viewerNav.edit')}
@@ -2444,8 +3011,10 @@
           cameraPlaced = false;
           editMode = true;
           if (walkthroughMode) exitWalkthroughMode();
+          if (flyMode) exitFlyMode();
           furniturePlacementMode = false;
         }
+        updateWallHandles();
       }}
       class="p-2 rounded-lg transition-colors {cameraPlacementMode ? 'bg-blue-600 text-white ring-2 ring-blue-300' : 'bg-black/70 text-white hover:bg-black/80'}"
       title={cameraPlacementMode ? $t('viewerNav.cameraCancel') : $t('viewerNav.cameraHelp')}
@@ -2473,7 +3042,7 @@
     <!-- Walkthrough Mode Toggle Button -->
     <button
       onclick={toggleWalkthroughMode}
-      class="p-2 rounded-lg bg-black/70 text-white hover:bg-black/80 transition-colors"
+      class="p-2 rounded-lg transition-colors {walkthroughMode ? 'bg-blue-600 text-white ring-2 ring-blue-300' : 'bg-black/70 text-white hover:bg-black/80'}"
       title={walkthroughMode ? $t('viewerNav.exitWalk') : $t('viewerNav.enterWalk')}
       aria-label={walkthroughMode ? $t('viewerNav.exitWalk') : $t('viewerNav.enterWalk')}
   >
@@ -2493,6 +3062,19 @@
         <path d="M10 14l2-2 1 2"/>
       </svg>
     {/if}
+    </button>
+
+    <!-- Free Fly Mode Toggle Button (Minecraft-style movement) -->
+    <button
+      onclick={toggleFlyMode}
+      aria-pressed={flyMode}
+      class="p-2 rounded-lg transition-colors {flyMode ? 'bg-emerald-600 text-white ring-2 ring-emerald-300' : 'bg-black/70 text-white hover:bg-black/80'}"
+      title={flyMode ? $t('viewerNav.exitFly') : $t('viewerNav.enterFly')}
+      aria-label={flyMode ? $t('viewerNav.exitFly') : $t('viewerNav.enterFly')}
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+        <polygon points="3 11 22 2 13 21 11 13 3 11"/>
+      </svg>
     </button>
   </div><!-- end 3D toolbar row -->
 
@@ -2734,7 +3316,40 @@
     </div>
   {/if}
 
-  {#if editMode && !walkthroughMode}
+  {#if flyMode}
+    <!-- Crosshair -->
+    <div class="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
+      <div class="w-4 h-4">
+        <svg width="16" height="16" viewBox="0 0 16 16" class="text-white drop-shadow-lg">
+          <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="1"/>
+          <line x1="8" y1="10" x2="8" y2="14" stroke="currentColor" stroke-width="1"/>
+          <line x1="2" y1="8" x2="6" y2="8" stroke="currentColor" stroke-width="1"/>
+          <line x1="10" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Free Fly Controls Panel -->
+    <div class="absolute top-4 left-4 z-10 bg-black/70 text-white text-xs rounded-lg backdrop-blur-sm p-3 space-y-2 min-w-[190px]">
+      <div class="font-semibold text-emerald-300 mb-1">{$t('viewerNav.flyControls')}</div>
+      <label class="flex items-center justify-between gap-2">
+        <span class="text-white/70">{$t('viewerNav.flySpeed')}</span>
+        <div class="flex items-center gap-1">
+          <input type="range" min="100" max="2000" step="50" bind:value={flySpeed} class="w-20 h-1 accent-emerald-400" />
+          <span class="w-10 text-right">{flySpeed}</span>
+        </div>
+      </label>
+    </div>
+
+    <!-- Help Text -->
+    <div class="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10 max-w-[90vw]">
+      <div class="bg-black/75 text-white text-xs sm:text-sm px-4 py-2 rounded-lg backdrop-blur-sm text-center">
+        {$t('viewerNav.flyHelp')}
+      </div>
+    </div>
+  {/if}
+
+  {#if editMode && !walkthroughMode && !flyMode}
     <div class="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10">
       <div class="bg-blue-600/90 text-white text-sm px-4 py-2 rounded-lg backdrop-blur-sm flex items-center gap-2">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2751,7 +3366,7 @@
 
     <!-- Furniture Placement Toggle -->
     <button
-      onclick={() => { furniturePlacementMode = !furniturePlacementMode; if (!furniturePlacementMode) { removeGhostPreview(); selectedCatalogId = null; furniturePickerOpen = false; } else { furniturePickerOpen = true; } }}
+      onclick={() => { furniturePlacementMode = !furniturePlacementMode; if (!furniturePlacementMode) { removeGhostPreview(); selectedCatalogId = null; furniturePickerOpen = false; } else { furniturePickerOpen = true; } updateWallHandles(); }}
       class="absolute top-16 right-28 z-50 p-2 rounded-lg transition-colors {furniturePlacementMode ? 'bg-green-600 text-white ring-2 ring-green-300' : 'bg-black/70 text-white hover:bg-black/80'}"
       title={furniturePlacementMode ? $t('viewerFurniture.exit') : $t('viewerFurniture.place')}
       aria-label={furniturePlacementMode ? $t('viewerFurniture.exit') : $t('viewerFurniture.place')}
@@ -2796,6 +3411,14 @@
         </div>
       </div>
     {/if}
+  {/if}
+
+  {#if selectedWallId3D && !walkthroughMode && !flyMode && !editMode && !cameraPlacementMode}
+    <div class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 z-10">
+      <div class="bg-blue-600/90 text-white text-xs sm:text-sm px-4 py-1.5 rounded-lg backdrop-blur-sm shadow">
+        {$t('viewerNav.wallEditHint')}
+      </div>
+    </div>
   {/if}
 
   <!-- Lighting Controls Toggle Button -->

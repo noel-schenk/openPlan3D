@@ -7,9 +7,9 @@ import { benchmarkProject } from './fixtures/render-benchmark';
 
 const home: FramingContext = { projectId: 'home', floorId: 'ground', stacked: false };
 
-it('fits the first build and every new project, active floor or stacking choice', () => {
+it('fits the first build and every new project or stacking choice, while keeping camera across floors', () => {
   expect(shouldFrameScene(null, home)).toBe(true);
-  expect(shouldFrameScene(home, { ...home, floorId: 'upper' })).toBe(true);
+  expect(shouldFrameScene(home, { ...home, floorId: 'upper' })).toBe(false);
   expect(shouldFrameScene(home, { ...home, stacked: true })).toBe(true);
   expect(shouldFrameScene({ ...home, stacked: true }, home)).toBe(true);
   // A saved copy keeps its floor ids, but it is another project.
@@ -23,7 +23,7 @@ it('keeps the viewpoint when the same context rebuilds', () => {
 
 // Mirrors the viewer: each activeFloor emission, unit change, arriving photo texture and stacking
 // toggle rebuilds the scene, and the context of that rebuild decides whether the camera is fitted.
-it('re-frames for floor, stacking and project changes, never for edits, history, units or textures', () => {
+it('re-frames for stacking and project changes, never for floor switches, edits, history, units or textures', () => {
   let step = 'open', stacked = false, framed: FramingContext | null = null;
   const rebuilt = new Set<string>(), frames: string[] = [];
   const rebuild = () => {
@@ -57,7 +57,7 @@ it('re-frames for floor, stacking and project changes, never for edits, history,
     act('other project', () => loadProject(structuredClone(benchmarkProject('small'))));
     expect([...rebuilt]).toEqual(['open', 'furniture', 'wall colour', 'wall height', 'undo', 'redo', 'texture', 'units',
       'stack', 'furniture while stacked', 'unstack', 'switch floor', 'add floor', 'undo add floor', 'other project']);
-    expect(frames).toEqual(['open', 'stack', 'unstack', 'switch floor', 'add floor', 'undo add floor', 'other project']);
+    expect(frames).toEqual(['open', 'stack', 'unstack', 'other project']);
   } finally {
     stopFloor(); stopSettings(); projectSettings.reset();
   }

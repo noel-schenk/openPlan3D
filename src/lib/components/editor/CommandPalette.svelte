@@ -2,7 +2,7 @@
   import { t, locale } from '$lib/i18n';
   import { furnitureName } from '$lib/i18n/furnitureNames';
   import { catalogCategoryLabels } from '$lib/i18n/catalogCategories';
-  import { exportPNGWithFeedback, exportPDFWithFeedback as exportPDF, exportSVGWithFeedback, exportDXFWithFeedback } from '$lib/stores/exportNotice';
+  import { exportPNGWithFeedback, exportUSDZWithFeedback, exportPDFWithFeedback as exportPDF, exportSVGWithFeedback, exportDXFWithFeedback } from '$lib/stores/exportNotice';
   import { tick } from 'svelte';
   import { modalDialog } from '$lib/utils/modalDialog';
   import { furnitureCatalog } from '$lib/utils/furnitureCatalog';
@@ -46,6 +46,7 @@
     { id: 'a-export-dxf', name: $t('commandPalette.exportDxf'), icon: '⚡', category: 'action', categoryLabel: `⚡ ${$t('commandPalette.action')}`, action: () => { const p = get(currentProject); if (p) exportDXFWithFeedback(p, get(locale)); } },
     { id: 'a-export-pdf', name: $t('commandPalette.exportPdf'), icon: '⚡', category: 'action', categoryLabel: `⚡ ${$t('commandPalette.action')}`, action: () => { const p = get(currentProject); if (p) exportPDF(p, get(locale)); } },
     { id: 'a-export-png', name: $t('commandPalette.exportPng'), icon: '⚡', category: 'action', categoryLabel: `⚡ ${$t('commandPalette.action')}`, action: () => { const p = get(currentProject); if (p) void exportPNGWithFeedback(p); } },
+    { id: 'a-export-usdz', name: $t('commandPalette.exportUsdz'), icon: '⚡', category: 'action', categoryLabel: `⚡ ${$t('commandPalette.action')}`, action: () => { const p = get(currentProject); if (p) void exportUSDZWithFeedback(p); } },
     { id: 'a-export-json', name: $t('commandPalette.exportJson'), icon: '⚡', category: 'action', categoryLabel: `⚡ ${$t('commandPalette.action')}`, action: () => { const p = get(currentProject); if (p) exportAsJSON(p); } },
     { id: 'a-toggle-grid', name: $t('commandPalette.toggleGrid'), icon: '⚡', category: 'action', categoryLabel: `⚡ ${$t('commandPalette.action')}`, action: () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', bubbles: true })); } },
     { id: 'a-toggle-snap', name: $t('commandPalette.toggleSnap'), icon: '⚡', category: 'action', categoryLabel: `⚡ ${$t('commandPalette.action')}`, action: () => { snapEnabled.update(v => !v); } },

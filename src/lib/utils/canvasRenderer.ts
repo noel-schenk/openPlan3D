@@ -8,7 +8,7 @@ import { bifoldPoints } from './doorSymbol';
  * All functions are pure — they take canvas context + data and render.
  * Extracted from FloorPlanCanvas.svelte.
  */
-import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, Floor, Annotation } from '$lib/models/types';
+import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, FloorPlane, Floor, Annotation } from '$lib/models/types';
 import type { Room } from '$lib/models/types';
 import type { CanvasState } from '$lib/utils/canvasInteraction';
 import type { ProjectSettings } from '$lib/stores/settings';
@@ -1182,6 +1182,60 @@ export function drawColumn(cs: CanvasState, col: Column, selected: boolean): voi
   ctx.restore();
 }
 
+// ── Horizontal floor plane drawing ──────────────────────────────────
+
+export function drawFloorPlane(cs: CanvasState, plane: FloorPlane, selected: boolean): void {
+  const { ctx, zoom } = cs;
+  const s = wts(cs, plane.position.x, plane.position.y);
+  const wPx = plane.width * zoom;
+  const hPx = plane.height * zoom;
+  if (!Number.isFinite(wPx) || !Number.isFinite(hPx) || wPx <= 0 || hPx <= 0) return;
+
+  ctx.save();
+  ctx.translate(s.x, s.y);
+  ctx.rotate(((plane.rotation || 0) * Math.PI) / 180);
+
+  ctx.fillStyle = plane.color || '#d6d3d1';
+  ctx.globalAlpha = selected ? 0.45 : 0.35;
+  ctx.fillRect(-wPx / 2, -hPx / 2, wPx, hPx);
+
+  if (plane.floorTexture && plane.floorTexture !== 'none') {
+    const texCanvas = getFloorTextureCanvas(plane.floorTexture);
+    if (texCanvas) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(-wPx / 2, -hPx / 2, wPx, hPx);
+      ctx.clip();
+      ctx.globalAlpha = 0.45;
+      const scale = zoom * 0.15;
+      if (scale > 0.01) {
+        ctx.scale(scale, scale);
+        const pat = ctx.createPattern(texCanvas, 'repeat');
+        if (pat) {
+          ctx.fillStyle = pat;
+          ctx.fillRect((-wPx / 2) / scale - 4, (-hPx / 2) / scale - 4, wPx / scale + 8, hPx / scale + 8);
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = selected ? '#3b82f6' : '#78716c';
+  ctx.lineWidth = selected ? 2 : 1.25;
+  ctx.strokeRect(-wPx / 2, -hPx / 2, wPx, hPx);
+
+  if (selected) {
+    ctx.strokeStyle = '#3b82f6';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(-wPx / 2 - 4, -hPx / 2 - 4, wPx + 8, hPx + 8);
+    ctx.setLineDash([]);
+  }
+
+  ctx.restore();
+}
+
 // ── Guide lines ──────────────────────────────────────────────────────
 
 export function drawGuides(cs: CanvasState, floor: Floor, selectedGuideId: string | null, RULER_SIZE: number): void {
@@ -1657,6 +1711,7 @@ export function drawMinimap(
     mctx.strokeStyle = '#64748b'; mctx.lineWidth = 1;
     mctx.beginPath(); mctx.moveTo(a.x, a.y); mctx.lineTo(b.x, b.y); mctx.stroke();
   }
+  for (const item of floor.floorPlanes ?? []) marker(item.position.x, item.position.y, item.color || '#a8a29e');
   for (const item of floor.stairs ?? []) marker(item.position.x, item.position.y, '#64748b');
   for (const item of floor.columns ?? []) marker(item.position.x, item.position.y, item.color || '#64748b');
   for (const item of floor.entourage ?? []) marker(item.position.x, item.position.y, '#16a34a');
@@ -1883,6 +1938,7 @@ export function drawFloorBelowGhost(cs: CanvasState, floor: Floor, outerWallIds:
   // Use the same footprints, treads and direction indicators as the edited floor.
   // Alpha keeps the reference subdued without replacing its geometry.
   ctx.globalAlpha *= .45;
+  for (const plane of floor.floorPlanes ?? []) drawFloorPlane(cs, plane, false);
   for (const stair of floor.stairs ?? []) drawStair(cs, stair, false);
 
   ctx.restore();

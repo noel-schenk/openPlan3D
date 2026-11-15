@@ -23,6 +23,7 @@
 
   let showLayers = $state(false);
   import FloorPlanCanvas from '$lib/components/editor/FloorPlanCanvas.svelte';
+  import FloorSwitcher from '$lib/components/editor/FloorSwitcher.svelte';
   import AlignmentToolbar from '$lib/components/editor/AlignmentToolbar.svelte';
   import UndoHistoryPanel from '$lib/components/editor/UndoHistoryPanel.svelte';
   import CommandPalette from '$lib/components/editor/CommandPalette.svelte';
@@ -248,16 +249,19 @@
         {#if mode === '2d'}
           <FloorPlanCanvas />
           <AlignmentToolbar />
-          {#if $elevationWallId}
-            <!-- Integrated elevation view replaces the plan canvas area (sidebars stay) -->
-            <ElevationView />
-          {/if}
         {:else}
           {#if ThreeViewer}
             <ThreeViewer />
           {:else}
             <div class="flex items-center justify-center h-full text-slate-400">{$t('shortcuts.loading3d')}</div>
           {/if}
+        {/if}
+        {#if $elevationWallId}
+          <!-- Integrated elevation view replaces the plan canvas area (sidebars stay) -->
+          <ElevationView />
+        {/if}
+        {#if !$elevationWallId}
+          <FloorSwitcher />
         {/if}
       </div>
       {#if showLayers && mode === '2d'}

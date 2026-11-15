@@ -14,7 +14,7 @@
   let selId: string | null = $state(null);
   onDestroy(selectedElementId.subscribe(id => { selId = id; }));
 
-  let vis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true });
+  let vis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, floorPlanes: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true });
   onDestroy(layerVisibility.subscribe(v => { vis = v; }));
 
   // Collapsed state per category
@@ -93,6 +93,13 @@
       cats.push({
         key: 'columns', label: $t('layers.columns'), icon: '🏛️',
         items: floor.columns.map((c, i) => ({ id: c.id, label: $t('layers.column', { shape: $t(`layers.value.${c.shape}`), number: i + 1 }), icon: '🏛️' })),
+      });
+    }
+
+    if (floor.floorPlanes?.length) {
+      cats.push({
+        key: 'floorPlanes', label: $t('layers.floorPlanes'), icon: '⬜',
+        items: floor.floorPlanes.map((fp, i) => ({ id: fp.id, label: $t('layers.floorPlane', { number: i + 1 }), icon: '⬜' })),
       });
     }
 

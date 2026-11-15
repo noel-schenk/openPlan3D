@@ -5,6 +5,7 @@ import { getEntourageDef } from './entourageCatalog';
 import { canvasSymbolDxf } from './canvasSymbolDxf';
 import { drawStair } from './canvasRenderer';
 import { columnPlanCorners } from './columnPlanGeometry';
+import { floorPlaneCorners } from './floorPlaneGeometry';
 import { hasPlanExportContent } from './planExportContent';
 import { cadText } from './exportText';
 import { dimensionPlanGeometry } from './dimensionPlanGeometry';
@@ -227,6 +228,13 @@ export function exportDXF(project: Project, language: Locale = 'en', visibility:
   d.addLayer('STAIRS', 8, 'CONTINUOUS');
   d.setActiveLayer('STAIRS');
   for (const stair of floor.stairs ?? []) canvasSymbolDxf(d,ctx=>drawStair({ctx,width:0,height:0,zoom:1,camX:0,camY:0},stair,false));
+
+  d.addLayer('FLOOR_PLANES', 8, 'CONTINUOUS');
+  d.setActiveLayer('FLOOR_PLANES');
+  for (const plane of floor.floorPlanes ?? []) {
+    const points = floorPlaneCorners(plane);
+    d.drawPolyline([...points, points[0]].map(p => [p.x, -p.y]));
+  }
 
   d.addLayer('COLUMNS', 7, 'CONTINUOUS');
   d.setActiveLayer('COLUMNS');

@@ -4,7 +4,7 @@
   let { onToggleLayers, layersOpen = false, onToggleHistory, historyOpen = false }: { onToggleLayers?: () => void; layersOpen?: boolean; onToggleHistory?: (trigger: HTMLButtonElement) => void; historyOpen?: boolean } = $props();
   import { captureMain3DPNG } from '$lib/utils/captureMain3D';
   import ExportNotice from '$lib/components/ExportNotice.svelte';
-  import { exportNotice, exportPNGWithFeedback, exportPDFWithFeedback as exportPDF, exportSVGWithFeedback, exportDXFWithFeedback, exportDWGWithFeedback, downloadInterchangeJson, openInSiblingPlanner, USER_GUIDE_URL } from '$lib/stores/exportNotice';
+  import { exportNotice, exportPNGWithFeedback, exportUSDZWithFeedback, exportPDFWithFeedback as exportPDF, exportSVGWithFeedback, exportDXFWithFeedback, exportDWGWithFeedback, downloadInterchangeJson, openInSiblingPlanner, USER_GUIDE_URL } from '$lib/stores/exportNotice';
   import { SIBLING_PLANNERS, type SiblingPlannerId } from '$lib/utils/transferLink';
   import { interchangeProjectName } from '$lib/utils/interchange';
   import { modalDialog, hasOpenModal } from '$lib/utils/modalDialog';
@@ -179,6 +179,20 @@
     } finally {
       exporting3D = false;
       if (!openingLifetime.signal.aborted && oldMode === '2d' && get(viewMode) === '3d') viewMode.set('2d');
+    }
+  }
+
+  let exportingUSDZ = $state(false);
+  async function onExportUSDZ() {
+    if (exportingUSDZ) return;
+    const project = get(currentProject);
+    if (!project) return;
+    exportingUSDZ = true;
+    exportOpen = false;
+    try {
+      await exportUSDZWithFeedback(project);
+    } finally {
+      exportingUSDZ = false;
     }
   }
 
@@ -623,6 +637,10 @@
         <button class="w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left flex items-center gap-2" onclick={onExport3DPNG} disabled={exporting3D}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
           {$t('exportMenu.png3d')}
+        </button>
+        <button class="w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left flex items-center gap-2" onclick={onExportUSDZ} disabled={exportingUSDZ}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          {$t('exportMenu.usdz')}
         </button>
         <button class="w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left flex items-center gap-2" onclick={onExportSVG}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
